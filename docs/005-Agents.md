@@ -2,18 +2,58 @@
 
 ## Status
 
-Not started — Phase 2/3
+Draft — Phase 3 (Architecture)
 
-## Purpose
+## 1. Common Shape
 
-Specification for each agent role: inputs, outputs, tools available, and the exact boundary of its responsibility (an agent owns exactly one lifecycle stage).
+Every agent role below runs as a Temporal Activity ([[ADR-0001]]), invoked by exactly one workflow transition ([[003-Domain]] / [[004-Workflow]]), and produces exactly one domain event on completion (success or a documented failure edge). None of the five roles spans more than one lifecycle stage — this is the "an agent owns exactly one state transition" boundary from [[000-Vision]] §5.
 
-## Planned Outline
+All five roles run against a single provider at v1 (Claude, per [[ADR-0003]]) through the Model Router abstraction in [[008-ModelRouter]].
 
-- Planner agent (investigation sources: local repo, docs, web, Azure DevOps, az cli; question/blocked protocol)
-- Prioritizer agent (ordering signals, cross-project prioritization)
-- Developer agent (sync, worktree, branch, implementation loop, test/build, live trace)
-- Deploy agent (publish gate execution: code, DB migrations, other local changes)
-- Git agent (commit, push, PR, worktree cleanup)
-- Per-project, per-agent memory (what each agent learns and retains, e.g. "this project uses XAF")
-- Agent-to-tool contract (how an agent calls MCP tools; error/timeout handling)
+## 2. Planner Agent
+
+- **Trigger**: Task enters `Inbox` (new, title-only, or re-entered via `UserAnsweredQuestions`).
+- **Inputs**: `Task.title`, `Task.description` (empty on first run), prior Q&A history (from `Event` rows, when re-entering from `Blocked`), the Project's repository at its root branch, and this project's accumulated agent memory (§6).
+- **Tools**: read-only repository access (no worktree — the Planner never writes code, so it doesn't need [[003-Domain]]'s per-task Worktree; a shared read-only clone of the root branch per project is sufficient), web fetch/search, and the Project's issue tracker — GitHub Issues at v1 per [[ADR-0002]] (Azure DevOps / `az cli` access from the founder's original scope is explicitly deferred with that ADR, not silently dropped).
+- **Outputs**: `Task.description`, `AcceptanceCriterion` rows, optionally `SubTask` rows, then either `PlannerCompleted` (→ `Backlog`) or `PlannerNeedsClarification` (→ `Blocked`) with the open questions recorded as event payload.
+- **Failure handling**: transient tool/API failures retry per Temporal's activity policy without a domain-visible transition ([[004-Workflow]] §4); genuine inability to resolve the task always produces `PlannerNeedsClarification`, never a guess.
+
+## 3. Prioritizer Agent
+
+- **Trigger**: a task enters `Backlog`, or an existing `Backlog` task's description/criteria changed after re-planning.
+- **Scope decision**: prioritization is **per-project**, not global across all of a user's projects. [[000-Vision]] UC-6 says a task is ordered "against everything else in the backlog" without specifying scope; comparing effort/value across unrelated codebases is a materially harder problem than ranking within one project's backlog, so it's out of scope for v1 and tracked in [[016-Roadmap]] instead of guessed at here.
+- **Inputs**: every `Backlog` task for that project — title, description, acceptance criteria, creation order (tiebreaker).
+- **Tools**: read-only access to the Project's backlog through the Forge API's internal service layer (agents never query Postgres directly — see [[012-API]]).
+- **Outputs**: `Task.priority` for every affected task, `PrioritizationCompleted` event per task.
+- **Failure handling**: no `Blocked` path exists for this role — only the Planner can block a task ([[003-Domain]] §3). If prioritization fails repeatedly, the task simply remains un-prioritized and visible as such in the UI; no other domain-visible failure state is introduced at v1.
+
+## 4. Developer Agent
+
+- **Trigger**: `WorkerAllocated` — the task was promoted to `Todo` and a Worker slot is free ([[003-Domain]] row 5).
+- **Inputs**: `Task.description`, acceptance criteria, sub-tasks, `Project.repository_url` / `root_branch`, per-project agent memory (§6).
+- **Tools**: Git worktree/branch operations via the GitHub plugin ([[ADR-0002]]), filesystem read/write scoped to its Worktree, terminal (build/test), and any additional MCP servers a project's stack requires.
+- **Clarifying the founder's original spec — when does the Developer agent commit?** The original flow only mentions git commit/push/PR at the final `Done` step (owned by the Git agent, §5). Read literally, that would mean zero git history exists until after human review, which is bad practice for anything but a trivial change. **Decision**: the Developer agent commits to its local branch inside the worktree as it works, for its own checkpointing and to leave a real history — these commits stay local (not pushed) until the Git agent's stage. The Git agent (§5) owns *pushing* that branch and opening the PR, not the act of committing itself. This preserves the founder's intent (nothing reaches the remote/PR stage before `Done`) while not requiring an agent to hold hours of uncommitted work in a worktree.
+- **Outputs**: `DeveloperCompleted` (→ `AwaitingPublish`, build/tests pass) or `DeveloperNeedsClarification` (→ `Blocked`, per [[004-Workflow]] §3 — re-entry always goes through `Inbox`, resuming against the *same* worktree rather than recreating it).
+- **Live trace**: every meaningful step (file read, command run, reasoning checkpoint) is surfaced incrementally, not just at completion — see [[000-Vision]] UC-9 and [[007-ExecutionEngine]] for the streaming mechanism.
+
+## 5. Deploy Agent
+
+- **Trigger**: `UserRequestedPublish` — the human moved the task from `AwaitingPublish` to `Publish`.
+- **Inputs**: the Task's worktree/branch, and the Project's publish configuration — **not yet specified**: how Forge knows *how* to publish a given project locally (restart a Docker Compose stack? run `dotnet publish` and copy artifacts? run a specific migration tool?) needs a concrete concept, tentatively a `PublishRecipe` per Project. This is flagged here as a gap to resolve in [[015-Deployment]], not invented in this document.
+- **Tools**: terminal, DB migration tooling, Docker (restart/rebuild), health-check calls.
+- **Outputs**: `DeployCompleted` (→ `Review`) or `DeployFailed` (→ `AwaitingPublish`, per [[004-Workflow]] §5 — no auto-retry, human re-triggers after inspecting).
+
+## 6. Git Agent
+
+- **Trigger**: `UserApprovedReview` — the human moved the task from `Review` to `Done`.
+- **Inputs**: the Task's worktree/branch, already containing the Developer agent's local commits (§4).
+- **Tools**: the GitHub plugin ([[ADR-0002]]) for push and PR creation.
+- **Outputs**: `GitPushed`, `PRCreated`, then `WorktreeDeleted` once cleanup completes. The task then waits for the external `PipelineConfirmedDeployment` event ([[003-Domain]] row 10) to reach `Production` — the Git agent does not itself decide when that happens.
+
+## 7. Per-Project, Per-Agent Memory
+
+Each agent role accumulates project-scoped notes it doesn't need to rediscover every run (e.g. "this project uses XAF", "this project's tests require a running MySQL instance") — the concept the founder described in the original scoping conversation. Modeled as a simple key/value store scoped by `(project_id, agent_role)`, not a vector/embedding store at v1 — retrieval is "load everything this agent knows about this project" rather than semantic search, since per-project memory is expected to stay small (tens of entries, not thousands). This needs a concrete entity in [[011-Database]] (`AgentMemory`), not yet added there — tracked as a gap from this document into that one.
+
+## 8. Agent-to-Tool Contract
+
+All five roles reach external systems exclusively through MCP servers ([[009-MCP]]) — no agent role has a bespoke, hand-rolled integration to Git, a cloud CLI, or a database. A tool call failure is retried per the same Temporal activity policy as any other transient failure ([[004-Workflow]] §4); a tool being unavailable/misconfigured (not merely slow or rate-limited) should surface as the same "genuine failure" path each role already has (`PlannerNeedsClarification`, `DeveloperNeedsClarification`, `DeployFailed`) rather than a silent retry loop with no visible end state.
