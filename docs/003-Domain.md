@@ -2,16 +2,80 @@
 
 ## Status
 
-Not started — Phase 2 (Domain)
+Draft — Phase 2 (Domain)
 
-## Purpose
+## 1. Entities
 
-The authoritative domain model: entities, aggregates, states, events and invariants. This is the source of truth for terms used loosely in [[000-Vision]].
+| Entity | Key fields | Notes |
+|---|---|---|
+| **Project** | `id`, `name`, `repository_url`, `root_branch` (`main`/`develop`/`dev`), `git_provider_plugin_id`, `created_at` | Maps 1:1 to a Git repository (see [[000-Vision]] §7). `git_provider_plugin_id` points at a [[010-Plugins]] instance — GitHub for every project at v1 per [[ADR-0002]]. |
+| **Task** | `id`, `project_id`, `title`, `description` (nullable until planned), `state`, `priority` (nullable until prioritized), `branch_name` (nullable until execution), `worktree_id` (nullable), `created_at`, `updated_at` | The aggregate root. Owns its `AcceptanceCriterion` list, its `SubTask`s, and is the subject of every `Event` scoped to it. |
+| **SubTask** | `id`, `task_id`, `title`, `description`, `order`, `done` (bool) | A planning artifact created by the Planner agent, not a first-class state-machine participant — see §3 for how it relates to its parent Task's lifecycle. |
+| **AcceptanceCriterion** | `id`, `task_id`, `description`, `satisfied` (bool) | Modeled as its own entity (not a text blob) so the UI can render/check them individually and each can carry its own audit trail. |
+| **Worker** | `id`, `name`, `status` (`idle`/`busy`/`offline`), `current_task_id` (nullable), `home_directory`, `created_at` | An isolated execution environment ([[000-Vision]] §7). |
+| **Worktree** | `id`, `task_id`, `project_id`, `path`, `branch_name`, `created_at`, `deleted_at` (nullable) | At most one *active* (non-deleted) Worktree per Task — see invariant in §2. |
+| **Run** | `id`, `task_id`, `agent_role` (`Planner`/`Prioritizer`/`Developer`/`Deploy`/`Git`), `model_provider`, `started_at`, `finished_at`, `status` (`success`/`failed`/`timeout`), `prompt_tokens`, `completion_tokens`, `cost_estimate` | One row per agent invocation. Feeds the cost/observability requirements in [[000-Vision]] UC-9. |
+| **Event** | `id`, `task_id` (nullable — some are system-level), `type`, `payload` (JSON), `occurred_at`, `actor` (`user:<id>` or `agent:<role>`) | Immutable. See the catalog in §4. This is the audit trail from [[000-Vision]] §5, largely backed by Temporal's own workflow history per [[ADR-0001]]. |
+| **Plugin** | `id`, `name`, `kind` (`git_provider`/`issue_tracker`/`cloud_cli`/`database`/`deployment_target`), `version`, `configuration` (JSON) | See [[010-Plugins]]. |
+| **Model** | `id`, `provider`, `capability_tier`, `cost_per_token`, `enabled` | Claude-only row populated at v1 per [[ADR-0003]]; schema supports more from day one. |
+| **User** | `id`, `name`, `email`, `role` | Maps to the personas in [[000-Vision]] §6. |
 
-## Planned Outline
+## 2. Aggregates and Invariants
 
-- Entities: Project, Task, SubTask, AcceptanceCriterion, Worker, Worktree, Run, Event, Plugin, Model, User
-- Aggregates and invariants (e.g. a Task always belongs to exactly one Project)
-- Task state machine (formal definition, valid transitions, guards)
-- Event catalog (TaskCreated, TaskMoved, AgentStarted, AgentCompleted, PublishRequested, ...)
-- Domain services vs. agent responsibilities
+- **Task is the aggregate root** for its `SubTask`s, `AcceptanceCriterion`s, and the `Event`s scoped to it.
+- **INV-1**: a Task belongs to exactly one Project (UC-2). Never nullable, never reassignable after creation.
+- **INV-2**: a Task has at most one *active* Worktree at a time. Enforced structurally by modeling Task lifecycle as one Temporal workflow execution per [[ADR-0001]] — a second worktree can't be created while the first is live because the workflow itself is single-threaded per task.
+- **INV-3**: a Task's state can only change via a valid edge in the state machine in §3 below. This is enforced by the Temporal workflow definition, not merely validated in an application-layer service — an illegal transition should be structurally unrepresentable, not just rejected by a check.
+- **INV-4**: `SubTask.done` can only be set to `true` once its parent Task has reached `Executing` or later. A sub-task is a planning artifact before execution begins; marking it "done" earlier has no meaning. (Flagged as an assumption — confirm when [[005-Agents]] specifies exactly how the Developer agent consumes sub-tasks.)
+
+## 3. Task State Machine
+
+States (unchanged from [[000-Vision]] §9): `Inbox`, `Backlog`, `Blocked`, `Todo`, `Executing`, `AwaitingPublish`, `Publishing`, `Review`, `Done`, `Production`.
+
+### Reconciling the founder's original spec: how many agents move a task into `Todo`?
+
+The original scope described three actors between `Backlog` and `Todo`: a Planner, a Prioritizer, and "a third agent that moves the task to Todo." [[000-Vision]] UC-7 already softened the third step to "a system... moves it to Todo" rather than naming a distinct LLM agent. This document makes that explicit as a modeling decision: promoting a task from `Backlog` to `Todo` is **deterministic scheduler logic** ([[006-Scheduler]]) — it fires when a worker slot is free and the task is at the top of the prioritized backlog — not an LLM judgment call. Only `Planner`, `Prioritizer`, `Developer`, `Deploy` and `Git` are LLM-driven agent roles (see [[005-Agents]]). This keeps the state machine's actor column honest: some transitions are triggered by an agent's output, some by a human moving a card, and some by plain scheduling logic.
+
+### Valid transitions (happy path)
+
+| # | From | To | Trigger event | Actor | Guard |
+|---|---|---|---|---|---|
+| 1 | `Inbox` | `Backlog` | `PlannerCompleted` | Planner agent | Description + acceptance criteria produced |
+| 2 | `Inbox` | `Blocked` | `PlannerNeedsClarification` | Planner agent | Planner recorded at least one open question |
+| 3 | `Blocked` | `Inbox` | `UserAnsweredQuestions` | User | At least one answer provided (UC-5) |
+| 4 | `Backlog` | `Todo` | `TaskPromotedToTodo` | Scheduler (deterministic, see reconciliation above) | Task is prioritized; a worker slot is free |
+| 5 | `Todo` | `Executing` | `WorkerAllocated` | Scheduler / Developer agent | Root branch sync succeeds; worktree created |
+| 6 | `Executing` | `AwaitingPublish` | `DeveloperCompleted` | Developer agent | Build and tests pass |
+| 7 | `AwaitingPublish` | `Publishing` | `UserRequestedPublish` | User (moves card to Publish) | None beyond the human decision (UC-10) |
+| 8 | `Publishing` | `Review` | `DeployCompleted` | Deploy agent | Publish steps (code, DB, other local changes) succeeded |
+| 9 | `Review` | `Done` | `UserApprovedReview` | User | None beyond the human decision |
+| 10 | `Done` | `Production` | `PipelineConfirmedDeployment` | External CI/CD (webhook) | Pipeline reports success |
+
+### Not yet specified (deferred to [[004-Workflow]])
+
+The happy path above is fully determined by the founder's original spec. What's **not** yet decided, and is explicitly out of scope for this document:
+
+- Failure edges: what happens when `DeveloperCompleted` should instead be `DeveloperFailed` (does the task return to `Todo`? to a new `Blocked` variant?), and equivalently for `DeployFailed`.
+- Timeout behavior for `Blocked` (open question already flagged in [[000-Vision]] §12).
+- Whether `Publishing → Review` can roll back if a deploy partially fails (migrations applied, restart failed).
+
+[[004-Workflow]] owns the full transition table including these failure/rollback/timeout paths; this document only establishes the states, the happy-path edges, and the invariant that no other edge is legal without an explicit decision recorded there.
+
+## 4. Event Catalog (initial)
+
+Each row is an `Event.type` value. This list will grow; it is not meant to be exhaustive on first pass.
+
+`TaskCreated`, `PlannerStarted`, `PlannerCompleted`, `PlannerNeedsClarification`, `UserAnsweredQuestions`, `PrioritizationCompleted`, `TaskPromotedToTodo`, `WorkerAllocated`, `DeveloperStarted`, `DeveloperCompleted`, `DeveloperFailed`, `UserRequestedPublish`, `DeployStarted`, `DeployCompleted`, `DeployFailed`, `UserApprovedReview`, `GitCommitted`, `GitPushed`, `PRCreated`, `WorktreeDeleted`, `PipelineConfirmedDeployment`.
+
+`TaskMoved` is kept as a generic umbrella type for any card move captured by the UI that doesn't yet map to one of the named events above (e.g. a manual correction) — every legitimate transition should eventually be one of the named events, not this umbrella, per INV-3.
+
+## 5. Domain Services vs. Agent Responsibilities
+
+An LLM agent **proposes** a transition (e.g. the Planner agent decides a task is unclear and would emit `PlannerNeedsClarification`); the domain layer (the Temporal workflow per [[ADR-0001]]) **disposes** — it only accepts the event if it corresponds to a legal edge in §3 for the task's current state. An agent's judgment is never itself the authority on whether a transition is valid; the state machine is.
+
+## 6. Open Questions
+
+Carried forward for [[004-Workflow]] and [[005-Agents]]:
+
+- Exact semantics of `SubTask` vis-à-vis the parent Task's own state — does a task with incomplete sub-tasks block the `Executing → AwaitingPublish` transition, or is that left to the Developer agent's judgment?
+- Whether `Run` should record partial/incremental agent progress (useful for the live trace in UC-9) or only start/finish — likely resolved in [[007-ExecutionEngine]].
