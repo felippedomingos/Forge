@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(docker *)",
+      "Bash(dotnet build*)",
+      "Bash(dotnet test*)",
+      "Bash(dotnet restore*)",
+      "Bash(dotnet run*)",
+      "Bash(dotnet new*)",
+      "Bash(dotnet ef*)",
+      "Bash(dotnet format*)",
+      "Bash(dotnet publish*)",
+      "Bash(dotnet watch*)",
+      "Bash(npm *)",
+      "Bash(pnpm *)",
+      "Bash(npx *)",
+      "Bash(node *)"
+    ],
+    "ask": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push *--force*)",
+      "Bash(git reset --hard*)",
+      "Bash(git checkout -- *)",
+      "Bash(git checkout .)",
+      "Bash(git clean -f*)",
+      "Bash(git branch -D*)",
+      "Bash(git branch -d*)",
+      "Bash(git worktree remove --force*)",
+      "Bash(git worktree remove -f*)",
+      "Bash(git rebase*)",
+      "Bash(git filter-branch*)",
+      "Bash(git config --global*)",
+      "Bash(docker system prune*)",
+      "Bash(docker volume rm*)",
+      "Bash(docker volume prune*)",
+      "Bash(docker rm -f*)",
+      "Bash(docker compose down -v*)",
+      "Bash(docker compose *rm*)",
+      "Bash(docker network prune*)",
+      "Bash(docker image prune*)",
+      "Bash(npm publish*)",
+      "Bash(npm unpublish*)",
+      "Bash(rm -rf*)",
+      "Bash(sudo*)"
+    ]
+  }
+}
