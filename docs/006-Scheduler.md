@@ -14,4 +14,4 @@ How events are turned into actual agent invocations: queuing, concurrency limits
 - Concurrency limits (per project, per worker, global)
 - Retry and backoff policy
 - Priority handling (interaction with the Prioritizer agent's ordering)
-- MVP implementation choice vs. future (Hangfire-style MVP vs. Temporal-style durable execution)
+- Temporal workflow/activity mapping (see [[ADR-0001]] — decided, not open)

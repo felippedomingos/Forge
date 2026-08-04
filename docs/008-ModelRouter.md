@@ -10,7 +10,8 @@ How Forge selects which LLM serves a given agent invocation, based on required c
 
 ## Planned Outline
 
-- Routing inputs (agent role, task complexity signal, cost budget, provider availability/rate limits)
-- Fallback and failover between providers
+- Provider interface + capability/cost metadata schema (implemented for Claude only in v1 — see [[ADR-0003]])
+- Routing inputs (agent role, task complexity signal, cost budget, provider availability/rate limits) — designed now, exercised once a second provider exists
+- Fallback and failover between providers — deferred past v1 per [[ADR-0003]]
 - Per-project/per-agent model overrides
 - Cost tracking integration (see [[012-API]] cost endpoints)

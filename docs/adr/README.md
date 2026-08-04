@@ -16,6 +16,13 @@ Do not write an ADR for reversible implementation details (variable naming, fold
 
 `Proposed` → `Accepted` → `Superseded by ADR-NNNN` (or `Rejected`)
 
+## Index
+
+- [ADR-0001](ADR-0001-temporal-as-workflow-engine.md) — Temporal as the workflow/orchestration engine
+- [ADR-0002](ADR-0002-github-first-git-provider.md) — GitHub as the first Git/issue-tracker plugin
+- [ADR-0003](ADR-0003-claude-only-model-router-v1.md) — Claude-only Model Router for v1
+- [ADR-0004](ADR-0004-dedicated-infrastructure.md) — Dedicated infrastructure for Forge
+
 ## Template
 
 ```markdown
