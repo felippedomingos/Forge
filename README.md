@@ -67,9 +67,27 @@ Implementation will begin after the architecture is finalized.
 
 ## Documentation
 
-The project documentation is available under `/docs`.
+The project documentation is available under [`/docs`](docs/), following a phased specification process — architecture is settled before implementation begins.
 
-It contains the complete functional specification, architecture decisions, workflows and implementation roadmap.
+- [000 — Vision](docs/000-Vision.md)
+- [001 — Requirements](docs/001-Requirements.md)
+- [002 — Architecture](docs/002-Architecture.md)
+- [003 — Domain Model](docs/003-Domain.md)
+- [004 — Workflow](docs/004-Workflow.md)
+- [005 — Agents](docs/005-Agents.md)
+- [006 — Scheduler](docs/006-Scheduler.md)
+- [007 — Execution Engine](docs/007-ExecutionEngine.md)
+- [008 — Model Router](docs/008-ModelRouter.md)
+- [009 — MCP Integration](docs/009-MCP.md)
+- [010 — Plugin System](docs/010-Plugins.md)
+- [011 — Database](docs/011-Database.md)
+- [012 — API](docs/012-API.md)
+- [013 — Frontend](docs/013-Frontend.md)
+- [014 — Security](docs/014-Security.md)
+- [015 — Deployment](docs/015-Deployment.md)
+- [016 — Roadmap](docs/016-Roadmap.md)
+- [Architecture Decision Records](docs/adr/)
+- [RFCs](docs/rfcs/)
 
 ---
 
