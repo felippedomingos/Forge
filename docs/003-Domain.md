@@ -8,8 +8,8 @@ Draft — Phase 2 (Domain)
 
 | Entity | Key fields | Notes |
 |---|---|---|
-| **Project** | `id`, `name`, `repository_url`, `root_branch` (`main`/`develop`/`dev`), `git_provider_plugin_id`, `created_at` | Maps 1:1 to a Git repository (see [[000-Vision]] §7). `git_provider_plugin_id` points at a [[010-Plugins]] instance — GitHub for every project at v1 per [[ADR-0002]]. |
-| **Task** | `id`, `project_id`, `title`, `description` (nullable until planned), `state`, `priority` (nullable until prioritized), `branch_name` (nullable until execution), `worktree_id` (nullable), `created_at`, `updated_at` | The aggregate root. Owns its `AcceptanceCriterion` list, its `SubTask`s, and is the subject of every `Event` scoped to it. |
+| **Project** | `id`, `name`, `prefix`, `next_task_number`, `repository_url`, `root_branch` (`main`/`develop`/`dev`), `git_provider_plugin_id`, `local_path` (nullable), `publish_recipe` (nullable JSON), `created_at` | Maps 1:1 to a Git repository (see [[000-Vision]] §7). `git_provider_plugin_id` points at a [[010-Plugins]] instance — GitHub for every project at v1 per [[ADR-0002]]. `prefix` (e.g. `"FORGE"`, uppercase, unique) + `next_task_number` build every Task's human-readable tag — founder-requested, since a raw GUID isn't something anyone can reference in conversation. `prefix` is immutable once a Task references it. |
+| **Task** | `id`, `project_id`, `number`, `title`, `description` (nullable until planned), `state`, `priority` (nullable until prioritized), `branch_name` (nullable until execution), `worktree_id` (nullable), `created_at`, `updated_at` | The aggregate root. Owns its `AcceptanceCriterion` list, its `SubTask`s, and is the subject of every `Event` scoped to it. `number` is sequential per-project (assigned atomically from `Project.next_task_number` on creation — [[012-API]] `POST /tasks`), combined with the owning Project's `prefix` to form the task's tag (`"FORGE-42"`), unique per `(project_id, number)`. |
 | **SubTask** | `id`, `task_id`, `title`, `description`, `order`, `done` (bool) | A planning artifact created by the Planner agent, not a first-class state-machine participant — see §3 for how it relates to its parent Task's lifecycle. |
 | **AcceptanceCriterion** | `id`, `task_id`, `description`, `satisfied` (bool) | Modeled as its own entity (not a text blob) so the UI can render/check them individually and each can carry its own audit trail. |
 | **Worker** | `id`, `name`, `status` (`idle`/`busy`/`offline`), `current_task_id` (nullable), `home_directory`, `created_at` | An isolated execution environment ([[000-Vision]] §7). |
@@ -19,6 +19,7 @@ Draft — Phase 2 (Domain)
 | **Plugin** | `id`, `name`, `kind` (`git_provider`/`issue_tracker`/`cloud_cli`/`database`/`deployment_target`), `version`, `configuration` (JSON) | See [[010-Plugins]]. |
 | **Model** | `id`, `provider`, `capability_tier`, `cost_per_token`, `enabled` | Claude-only row populated at v1 per [[ADR-0003]]; schema supports more from day one. |
 | **User** | `id`, `name`, `email`, `role` | Maps to the personas in [[000-Vision]] §6. |
+| **AgentMemory** | `id`, `project_id`, `agent_role`, `key`, `value`, `updated_at` | Project-wide **shared** memory, not per-role despite the `agent_role` column ([[005-Agents]] §7 explains the reconciliation) — every agent role reads every entry for the project regardless of who wrote it. Unique on `(project_id, agent_role, key)`; the API ([[012-API]]) ignores `agent_role` entirely and always writes `Planner` as a stable default. |
 
 ## 2. Aggregates and Invariants
 

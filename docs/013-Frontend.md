@@ -26,12 +26,16 @@ Chosen via direct founder Q&A, not assumed:
 - **Task creation**: a `Dialog` (not an inline form) — project select + title input, `POST /tasks` per [[000-Vision]] UC-3.
 - **Task detail panel**: a `Sheet` sliding from the right — description, acceptance-criteria checklist, live event timeline, per-run cost. Shows `PlannerStarted → PlannerInvokingModel → PlannerCompleted` in near-real-time during a real (multi-second) Claude call.
 - **Column hints** (founder-requested): a short, always-visible, amber-highlighted line above every column header explaining what happens in/to a task there (e.g. Awaiting Publish → "Drag/click Publish when ready") — makes the board self-explanatory without hovering or reading docs.
+- **Project sidebar** (founder-requested): a left-hand nav replacing the old header dropdown — an "All tasks" entry (cross-project view, [[000-Vision]] UC-1) plus one row per Project, each showing its live task count and an edit (pencil) action revealed on hover.
+- **Project edit dialog**: opened from the sidebar's pencil icon — `name`/`repositoryUrl`/`rootBranch`/`localPath` (`PATCH /projects/{id}`, [[012-API]]), plus a **shared memory** editor (list existing `AgentMemory` entries with delete, add a new key/value pair) — the same memory the Planner/Developer prompts actually read ([[005-Agents]] §7). `prefix` is shown as a badge but not editable here (immutable once tasks reference it).
+- **Task tags** (founder-requested): every card and the task detail panel render `{Project.prefix}-{Task.number}` (e.g. `FORGE-42`) so a task can be referenced in conversation without pasting a raw GUID.
 - **Real-time via WebSocket** (`useTaskWebSocket`, [[007-ExecutionEngine]] §4): the task detail panel connects to `/ws/tasks/{id}` and refetches the instant a "refresh" push arrives — validated live with sub-second delivery. A 10s poll (`refetchInterval`) remains only as a fallback for a dropped socket, not the primary mechanism anymore. The board's own task list still polls every 2s and does **not** yet have a WebSocket (would need one connection per visible task or a board-wide channel that doesn't exist — see [[007-ExecutionEngine]] §6).
 - **Toasts** (Sonner) for action feedback (task created, promoted, published, approved, drag rejected) instead of silent state changes.
 
 ## 4. What's Explicitly Not Built Yet
 
-- **Navigation / other views**: Projects list, Execution view, Logs, Metrics, Models, Workers, Settings — none exist.
+- **Navigation / other views**: Execution view, Logs, Metrics, Models, Workers, Settings — none exist. (Projects now has a sidebar + edit dialog, per §3 above.)
+- **Project creation from the UI** — `POST /projects` has no dialog counterpart yet; new projects are still created directly against the API.
 - **Diff/commits view** in the task detail panel — meaningless until there's a real diff to show beyond the commit message already in the timeline.
 - **Board-wide real-time**: only the (single, currently-open) task detail panel has a WebSocket; the board's cross-task list still polls every 2s.
 - **Board views beyond Kanban** (list, timeline, tree) — post-v1 per [[000-Vision]] §7.

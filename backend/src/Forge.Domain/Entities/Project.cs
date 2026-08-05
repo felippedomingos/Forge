@@ -5,6 +5,15 @@ public class Project
 {
     public Guid Id { get; set; }
     public required string Name { get; set; }
+    // Short, human-readable code (e.g. "FORGE", "SAND") used to build each Task's
+    // display tag ("FORGE-42") - founder-requested, since raw GUIDs aren't something
+    // anyone can reference in conversation. Uppercase alnum, uniqueness enforced at
+    // the database level (docs/011-Database.md).
+    public required string Prefix { get; set; }
+    // The next number to assign to a Task created under this project - incremented
+    // atomically in the same SaveChanges call that creates the Task, so two tasks
+    // created concurrently never collide (docs/012-API.md POST /tasks).
+    public int NextTaskNumber { get; set; } = 1;
     public required string RepositoryUrl { get; set; }
     public required string RootBranch { get; set; } // "main" | "develop" | "dev"
     public Guid GitProviderPluginId { get; set; }

@@ -7,7 +7,17 @@ import { cn } from '@/lib/utils'
 import { STATE_CONFIG } from '@/lib/state-config'
 import type { TaskItem } from '@/lib/api'
 
-export function TaskCard({ task, onOpen }: { task: TaskItem; onOpen: (id: string) => void }) {
+export function TaskCard({
+  task,
+  tag,
+  onOpen,
+}: {
+  task: TaskItem
+  // "{ProjectPrefix}-{Number}" (e.g. "FORGE-42") - founder-requested, so a task can be
+  // referenced in conversation without pasting a raw GUID.
+  tag: string
+  onOpen: (id: string) => void
+}) {
   const config = STATE_CONFIG[task.state]
   const draggable = Boolean(config.dragTarget)
 
@@ -43,7 +53,10 @@ export function TaskCard({ task, onOpen }: { task: TaskItem; onOpen: (id: string
             <GripVertical className="size-3.5" />
           </button>
         )}
-        <p className="text-xs leading-snug text-foreground">{task.title}</p>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-mono text-[9px] font-medium text-muted-foreground/70">{tag}</span>
+          <p className="text-xs leading-snug text-foreground">{task.title}</p>
+        </div>
       </div>
 
       {config.spin && (

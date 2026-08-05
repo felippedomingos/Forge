@@ -12,13 +12,16 @@ interface BoardColumnProps {
   // Which source state is currently being dragged, if any - used to highlight this
   // column as a valid or invalid drop target while a drag is in progress.
   draggingFromState: TaskState | null
+  // projectId -> "PREFIX" lookup, so each card can render its "{PREFIX}-{number}" tag
+  // without every column needing the full Project objects.
+  prefixByProjectId: Record<string, string>
 }
 
 // Founder feedback: all 10 columns must fit on screen (no horizontal scroll) - each
 // column is a flexible grid cell (min-w-0 lets it shrink below its content's natural
 // width) rather than a fixed-width item in a scrolling row. Cards scroll vertically
 // within their own column instead of growing the page.
-export function BoardColumn({ state, tasks, onOpenTask, draggingFromState }: BoardColumnProps) {
+export function BoardColumn({ state, tasks, onOpenTask, draggingFromState, prefixByProjectId }: BoardColumnProps) {
   const config = STATE_CONFIG[state]
   const acceptsFrom = DROP_TARGETS[state]
   const { setNodeRef, isOver } = useDroppable({ id: state, disabled: !acceptsFrom })
@@ -51,7 +54,12 @@ export function BoardColumn({ state, tasks, onOpenTask, draggingFromState }: Boa
         )}
       >
         {tasks.map((task) => (
-          <TaskCard key={task.id} task={task} onOpen={onOpenTask} />
+          <TaskCard
+            key={task.id}
+            task={task}
+            tag={`${prefixByProjectId[task.projectId] ?? '?'}-${task.number}`}
+            onOpen={onOpenTask}
+          />
         ))}
         {tasks.length === 0 && (
           <p className="px-1 py-2 text-center text-[11px] text-muted-foreground/50">Empty</p>

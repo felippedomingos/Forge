@@ -6,6 +6,9 @@ public class TaskItem
 {
     public Guid Id { get; set; }
     public Guid ProjectId { get; set; }
+    // Per-project sequential number - combined with Project.Prefix to form the
+    // human-readable tag ("FORGE-42") shown throughout the UI instead of the raw Id.
+    public int Number { get; set; }
     public required string Title { get; set; }
     public string? Description { get; set; }
     public TaskState State { get; set; } = TaskState.Inbox;

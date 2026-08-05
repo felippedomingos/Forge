@@ -19,6 +19,12 @@ Directly implements the entities from [[003-Domain]] §1, plus `agent_memory` (t
 CREATE TABLE projects (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name                  text NOT NULL,
+  prefix                text NOT NULL,           -- uppercase, unique; builds each task's tag
+                                                   -- ("FORGE-42") - immutable once a task
+                                                   -- references it (docs/003-Domain.md §1)
+  next_task_number      int  NOT NULL DEFAULT 1,  -- incremented atomically alongside each
+                                                   -- new task's insert (docs/012-API.md
+                                                   -- POST /tasks)
   repository_url        text NOT NULL,
   root_branch           text NOT NULL,          -- 'main' | 'develop' | 'dev'
   git_provider_plugin_id uuid NOT NULL REFERENCES plugins(id),
@@ -28,10 +34,13 @@ CREATE TABLE projects (
                                                    -- (docs/005-Agents.md §2)
   created_at            timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX ix_projects_prefix ON projects(prefix);
 
 CREATE TABLE tasks (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id    uuid NOT NULL REFERENCES projects(id),
+  number        int  NOT NULL,                  -- per-project sequential; + Project.prefix
+                                                  -- = the task's tag (docs/003-Domain.md §1)
   title         text NOT NULL,
   description   text NULL,
   state         text NOT NULL,                  -- see 003-Domain §3 for the enum values
@@ -41,6 +50,7 @@ CREATE TABLE tasks (
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX ix_tasks_project_id_number ON tasks(project_id, number);
 CREATE INDEX ix_tasks_project_state    ON tasks(project_id, state);
 CREATE INDEX ix_tasks_project_priority ON tasks(project_id, priority);
 

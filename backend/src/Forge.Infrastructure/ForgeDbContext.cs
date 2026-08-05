@@ -28,12 +28,19 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
             e.ToTable("projects");
             e.HasKey(p => p.Id);
             e.Property(p => p.PublishRecipe).HasColumnType("jsonb");
+            // Two projects sharing a prefix would make task tags ambiguous ("FORGE-1"
+            // in which project?) - enforced here, not just convention.
+            e.HasIndex(p => p.Prefix).IsUnique();
         });
 
         modelBuilder.Entity<TaskItem>(e =>
         {
             e.ToTable("tasks");
             e.HasKey(t => t.Id);
+            // A task's tag (Project.Prefix + "-" + Number) must be unique within its
+            // project - two tasks with the same number in the same project would be
+            // indistinguishable in the UI.
+            e.HasIndex(t => new { t.ProjectId, t.Number }).IsUnique();
             // docs/011-Database.md §2: `state text NOT NULL` - stored as its enum name,
             // not the default int, so the column matches the documented schema and isn't
             // silently corrupted if TaskState's member order ever changes.

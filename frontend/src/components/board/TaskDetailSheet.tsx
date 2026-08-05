@@ -33,6 +33,9 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
     enabled: !!taskId,
     refetchInterval: 10000,
   })
+  // Same query key/cache as the board's project list (App.tsx) - free here, just a
+  // lookup for the task's tag ("{prefix}-{number}").
+  const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: api.listProjects })
   const eventsQuery = useQuery({
     queryKey: ['task-events', taskId],
     queryFn: () => api.getTaskEvents(taskId!),
@@ -83,6 +86,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
 
   const task = taskQuery.data
   const events = eventsQuery.data ?? []
+  const projectPrefix = projectsQuery.data?.find((p) => p.id === task?.projectId)?.prefix
   const config = task ? STATE_CONFIG[task.state] : null
   const inProgress = task && ['Inbox', 'Executing', 'Publishing'].includes(task.state)
   const totalCost = task?.runs?.reduce((sum, r) => sum + r.costEstimate, 0) ?? 0
@@ -104,6 +108,11 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
               <div className="flex items-center gap-2">
                 <config.icon className={`size-3.5 text-primary ${config.spin ? 'animate-spin' : ''}`} />
                 <Badge variant="secondary" className="text-[10px]">{config.label}</Badge>
+                {projectPrefix && (
+                  <Badge variant="outline" className="font-mono text-[10px]">
+                    {projectPrefix}-{task.number}
+                  </Badge>
+                )}
                 {inProgress && (
                   <span className="text-[10px] text-muted-foreground">agent working…</span>
                 )}

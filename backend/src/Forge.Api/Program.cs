@@ -77,6 +77,7 @@ app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, Crea
     {
         Id = Guid.NewGuid(),
         Name = request.Name,
+        Prefix = request.Prefix.ToUpperInvariant(),
         RepositoryUrl = request.RepositoryUrl,
         RootBranch = request.RootBranch,
         GitProviderPluginId = request.GitProviderPluginId,
@@ -94,6 +95,68 @@ app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, Crea
     return Results.Created($"/projects/{project.Id}", project);
 });
 
+app.MapGet("/projects/{id:guid}", async (ForgeDbContext db, Guid id) =>
+    await db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id)
+        is { } project ? Results.Ok(project) : Results.NotFound());
+
+// Sidebar project-edit view (founder-requested) - repo location/branch and where the
+// canonical checkout lives on this machine. Name/RepositoryUrl/RootBranch/LocalPath
+// only; Prefix is immutable once tasks reference it in their tags, and PublishRecipe
+// keeps its own dedicated endpoint above.
+app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdateProjectRequest request) =>
+{
+    var project = await db.Projects.FindAsync(id);
+    if (project is null) return Results.NotFound();
+
+    if (request.Name is not null) project.Name = request.Name;
+    if (request.RepositoryUrl is not null) project.RepositoryUrl = request.RepositoryUrl;
+    if (request.RootBranch is not null) project.RootBranch = request.RootBranch;
+    if (request.LocalPath is not null) project.LocalPath = request.LocalPath;
+    await db.SaveChangesAsync();
+    return Results.Ok(project);
+});
+
+// docs/005-Agents.md §7 - project-wide shared memory (see MemoryEntryRequest's note on
+// why this ignores AgentRole even though the underlying table has one).
+app.MapGet("/projects/{id:guid}/memory", async (ForgeDbContext db, Guid id) =>
+    await db.AgentMemories.AsNoTracking().Where(m => m.ProjectId == id).OrderBy(m => m.Key).ToListAsync());
+
+app.MapPut("/projects/{id:guid}/memory", async (ForgeDbContext db, Guid id, MemoryEntryRequest request) =>
+{
+    var existing = await db.AgentMemories.FirstOrDefaultAsync(m => m.ProjectId == id && m.Key == request.Key);
+    if (existing is not null)
+    {
+        existing.Value = request.Value;
+        existing.UpdatedAt = DateTimeOffset.UtcNow;
+    }
+    else
+    {
+        db.AgentMemories.Add(new AgentMemory
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = id,
+            // Shared memory has no single "owning" role - Planner is just a stable
+            // default so the (ProjectId, AgentRole, Key) unique index has something
+            // to key on. Every agent reads every entry regardless (AgentActivities).
+            AgentRole = AgentRole.Planner,
+            Key = request.Key,
+            Value = request.Value,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+    }
+    await db.SaveChangesAsync();
+    return Results.Ok();
+});
+
+app.MapDelete("/projects/{id:guid}/memory/{key}", async (ForgeDbContext db, Guid id, string key) =>
+{
+    var existing = await db.AgentMemories.FirstOrDefaultAsync(m => m.ProjectId == id && m.Key == key);
+    if (existing is null) return Results.NotFound();
+    db.AgentMemories.Remove(existing);
+    await db.SaveChangesAsync();
+    return Results.Ok();
+});
+
 app.MapGet("/tasks", async (ForgeDbContext db, Guid? projectId, TaskState? state) =>
 {
     var query = db.Tasks.AsNoTracking().AsQueryable();
@@ -104,19 +167,28 @@ app.MapGet("/tasks", async (ForgeDbContext db, Guid? projectId, TaskState? state
 
 app.MapPost("/tasks", async (ForgeDbContext db, TemporalClient temporal, CreateTaskRequest request) =>
 {
+    var project = await db.Projects.FindAsync(request.ProjectId);
+    if (project is null) return Results.NotFound($"Project {request.ProjectId} not found.");
+
     // docs/000-Vision.md UC-3: a task can be created with just a title. Creating the row
     // and starting its workflow aren't in one transaction - a crash between the two
     // would leave a task stuck with no workflow driving it. Known gap, not solved here;
     // see docs/007-ExecutionEngine.md open questions.
+    //
+    // Number is assigned from Project.NextTaskNumber and both are saved in the same
+    // SaveChangesAsync call (one DB transaction), so two concurrent task creations
+    // for the same project can never be handed the same number.
     var task = new TaskItem
     {
         Id = Guid.NewGuid(),
         ProjectId = request.ProjectId,
+        Number = project.NextTaskNumber,
         Title = request.Title,
         State = TaskState.Inbox,
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow
     };
+    project.NextTaskNumber++;
     db.Tasks.Add(task);
     await db.SaveChangesAsync();
 
@@ -260,9 +332,15 @@ app.Run();
 
 // docs/012-API.md §2 request shapes - kept next to Program.cs at this skeleton stage,
 // move to their own files once the API grows past this first slice.
-record CreateProjectRequest(string Name, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId);
+record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId);
+record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath);
 record CreateTaskRequest(Guid ProjectId, string Title);
 record AnswerQuestionsRequest(List<string> Answers);
 record MoveTaskRequest(TaskState TargetState);
 // docs/015-Deployment.md §2 - matches AgentActivities.PublishRecipeDto's shape exactly.
 record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTargets, string? HealthCheckUrl);
+// docs/005-Agents.md §7 - despite AgentMemory's per-(project,role) schema, the founder
+// wants this to read/write as project-wide SHARED memory: the UI and these endpoints
+// don't scope by role at all, and prompts (AgentActivities) read every entry for the
+// project regardless of which role originally wrote it.
+record MemoryEntryRequest(string Key, string Value);

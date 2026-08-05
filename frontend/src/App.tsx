@@ -1,19 +1,13 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { DndContext, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { Flame } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { CreateTaskDialog } from '@/components/board/CreateTaskDialog'
 import { BoardColumn } from '@/components/board/BoardColumn'
 import { TaskDetailSheet } from '@/components/board/TaskDetailSheet'
+import { ProjectSidebar } from '@/components/board/ProjectSidebar'
 import { api, TASK_STATES, type TaskState } from '@/lib/api'
 import { DROP_TARGETS } from '@/lib/state-config'
 
@@ -45,6 +39,16 @@ function Board() {
   const tasks =
     selectedProjectId === 'all' ? allTasks : allTasks.filter((t) => t.projectId === selectedProjectId)
 
+  const prefixByProjectId = useMemo(
+    () => Object.fromEntries(projects.map((p) => [p.id, p.prefix])),
+    [projects],
+  )
+  const taskCountByProject = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const t of allTasks) counts[t.projectId] = (counts[t.projectId] ?? 0) + 1
+    return counts
+  }, [allTasks])
+
   const handleDragStart = (event: DragStartEvent) => {
     setDraggingFromState((event.active.data.current?.state as TaskState) ?? null)
   }
@@ -66,69 +70,67 @@ function Board() {
     else if (sourceState === 'Review') approve.mutate(taskId)
   }
 
+  const selectedProject = projects.find((p) => p.id === selectedProjectId)
+
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <Toaster theme="dark" position="bottom-right" />
 
-      <header className="flex items-center gap-3 border-b border-border/60 px-4 py-2.5">
-        <div className="flex items-center gap-1.5">
-          <Flame className="size-4 text-primary" />
-          <h1 className="text-sm font-semibold">Forge</h1>
-        </div>
+      <ProjectSidebar
+        projects={projects}
+        selectedProjectId={selectedProjectId}
+        onSelectProject={setSelectedProjectId}
+        taskCountByProject={taskCountByProject}
+        totalTaskCount={allTasks.length}
+      />
 
-        <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
-          <SelectTrigger className="h-8 w-48 text-xs">
-            <SelectValue placeholder="All projects" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All projects</SelectItem>
-            {projects.map((p) => (
-              <SelectItem key={p.id} value={p.id}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="flex items-center gap-3 border-b border-border/60 px-4 py-2.5">
+          <h2 className="text-sm font-medium">
+            {selectedProjectId === 'all' ? 'All tasks' : (selectedProject?.name ?? '…')}
+          </h2>
 
-        <p className="text-xs text-muted-foreground">
-          {tasks.length} task{tasks.length === 1 ? '' : 's'}
-        </p>
-
-        <div className="ml-auto">
-          <CreateTaskDialog projects={projects} />
-        </div>
-      </header>
-
-      {projectsQuery.isLoading ? (
-        <div className="grid flex-1 grid-cols-10 gap-2 p-4">
-          {Array.from({ length: 10 }).map((_, i) => (
-            <Skeleton key={i} className="rounded-lg" />
-          ))}
-        </div>
-      ) : projects.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
-          <Flame className="size-8 text-muted-foreground/40" />
-          <p className="text-sm text-muted-foreground">
-            No projects yet — create one via <code className="rounded bg-muted px-1">POST /api/projects</code>.
+          <p className="text-xs text-muted-foreground">
+            {tasks.length} task{tasks.length === 1 ? '' : 's'}
           </p>
-        </div>
-      ) : (
-        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          {/* Founder feedback: all 10 columns fit on screen, no horizontal scroll -
-              an even grid instead of a scrolling flex row. */}
-          <div className="grid flex-1 grid-cols-10 gap-2 overflow-hidden p-4">
-            {TASK_STATES.map((state) => (
-              <BoardColumn
-                key={state}
-                state={state}
-                tasks={tasks.filter((t) => t.state === state)}
-                onOpenTask={setOpenTaskId}
-                draggingFromState={draggingFromState}
-              />
+
+          <div className="ml-auto">
+            <CreateTaskDialog projects={projects} />
+          </div>
+        </header>
+
+        {projectsQuery.isLoading ? (
+          <div className="grid flex-1 grid-cols-10 gap-2 p-4">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <Skeleton key={i} className="rounded-lg" />
             ))}
           </div>
-        </DndContext>
-      )}
+        ) : projects.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+            <Flame className="size-8 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">
+              No projects yet — create one via <code className="rounded bg-muted px-1">POST /api/projects</code>.
+            </p>
+          </div>
+        ) : (
+          <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+            {/* Founder feedback: all 10 columns fit on screen, no horizontal scroll -
+                an even grid instead of a scrolling flex row. */}
+            <div className="grid flex-1 grid-cols-10 gap-2 overflow-hidden p-4">
+              {TASK_STATES.map((state) => (
+                <BoardColumn
+                  key={state}
+                  state={state}
+                  tasks={tasks.filter((t) => t.state === state)}
+                  onOpenTask={setOpenTaskId}
+                  draggingFromState={draggingFromState}
+                  prefixByProjectId={prefixByProjectId}
+                />
+              ))}
+            </div>
+          </DndContext>
+        )}
+      </div>
 
       <TaskDetailSheet taskId={openTaskId} onClose={() => setOpenTaskId(null)} />
     </div>

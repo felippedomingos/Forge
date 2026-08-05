@@ -13,7 +13,7 @@ All five roles run against a single provider at v1 (Claude, per [[ADR-0003]]) th
 ## 2. Planner Agent
 
 - **Trigger**: Task enters `Inbox` (new, title-only, or re-entered via `UserAnsweredQuestions`).
-- **Inputs**: `Task.title`, `Task.description` (empty on first run), prior Q&A history (from `Event` rows, when re-entering from `Blocked`), the Project's repository at its root branch, and this project's accumulated agent memory (§6).
+- **Inputs**: `Task.title`, `Task.description` (empty on first run), prior Q&A history (from `Event` rows, when re-entering from `Blocked`), the Project's repository at its root branch, and this project's shared project memory (§7).
 - **Tools**: read-only repository access (no worktree — the Planner never writes code, so it doesn't need [[003-Domain]]'s per-task Worktree; a shared read-only clone of the root branch per project is sufficient), web fetch/search, and the Project's issue tracker — GitHub Issues at v1 per [[ADR-0002]] (Azure DevOps / `az cli` access from the founder's original scope is explicitly deferred with that ADR, not silently dropped).
 - **Outputs**: `Task.description`, `AcceptanceCriterion` rows, optionally `SubTask` rows, then either `PlannerCompleted` (→ `Backlog`) or `PlannerNeedsClarification` (→ `Blocked`) with the open questions recorded as event payload.
 - **Failure handling**: transient tool/API failures retry per Temporal's activity policy without a domain-visible transition ([[004-Workflow]] §4); genuine inability to resolve the task always produces `PlannerNeedsClarification`, never a guess.
@@ -30,7 +30,7 @@ All five roles run against a single provider at v1 (Claude, per [[ADR-0003]]) th
 ## 4. Developer Agent
 
 - **Trigger**: `WorkerAllocated` — the task was promoted to `Todo` and a Worker slot is free ([[003-Domain]] row 5).
-- **Inputs**: `Task.description`, acceptance criteria, sub-tasks, `Project.repository_url` / `root_branch`, per-project agent memory (§6).
+- **Inputs**: `Task.description`, acceptance criteria, sub-tasks, `Project.repository_url` / `root_branch`, shared project memory (§7).
 - **Tools**: Git worktree/branch operations via the GitHub plugin ([[ADR-0002]]), filesystem read/write scoped to its Worktree, terminal (build/test), and any additional MCP servers a project's stack requires.
 - **Clarifying the founder's original spec — when does the Developer agent commit?** The original flow only mentions git commit/push/PR at the final `Done` step (owned by the Git agent, §5). Read literally, that would mean zero git history exists until after human review, which is bad practice for anything but a trivial change. **Decision**: the Developer agent commits to its local branch inside the worktree as it works, for its own checkpointing and to leave a real history — these commits stay local (not pushed) until the Git agent's stage. The Git agent (§5) owns *pushing* that branch and opening the PR, not the act of committing itself. This preserves the founder's intent (nothing reaches the remote/PR stage before `Done`) while not requiring an agent to hold hours of uncommitted work in a worktree.
 - **Outputs**: `DeveloperCompleted` (→ `AwaitingPublish`, build/tests pass) or `DeveloperNeedsClarification` (→ `Blocked`, per [[004-Workflow]] §3 — re-entry always goes through `Inbox`, resuming against the *same* worktree rather than recreating it).
@@ -50,9 +50,13 @@ All five roles run against a single provider at v1 (Claude, per [[ADR-0003]]) th
 - **Tools**: the GitHub plugin ([[ADR-0002]]) for push and PR creation.
 - **Outputs**: `GitPushed`, `PRCreated`, then `WorktreeDeleted` once cleanup completes. The task then waits for the external `PipelineConfirmedDeployment` event ([[003-Domain]] row 10) to reach `Production` — the Git agent does not itself decide when that happens.
 
-## 7. Per-Project, Per-Agent Memory
+## 7. Per-Project Shared Memory
 
-Each agent role accumulates project-scoped notes it doesn't need to rediscover every run (e.g. "this project uses XAF", "this project's tests require a running MySQL instance") — the concept the founder described in the original scoping conversation. Modeled as a simple key/value store scoped by `(project_id, agent_role)`, not a vector/embedding store at v1 — retrieval is "load everything this agent knows about this project" rather than semantic search, since per-project memory is expected to stay small (tens of entries, not thousands). This needs a concrete entity in [[011-Database]] (`AgentMemory`), not yet added there — tracked as a gap from this document into that one.
+**Implemented.** Modeled as a simple key/value store, `AgentMemory` ([[003-Domain]] §1, [[011-Database]]), not a vector/embedding store — retrieval is "load everything recorded for this project" rather than semantic search, since per-project memory is expected to stay small (tens of entries, not thousands).
+
+**Reconciling the schema with how it's actually used**: the table is keyed `(project_id, agent_role, key)` — scoped per-role, as originally conceived (each agent role accumulating its own notes, e.g. "this project uses XAF"). In practice, the founder's request was for **project-wide shared** memory: one place to record conventions/decisions/gotchas that every agent should know about a project, not siloed by which role wrote it. `AgentActivities.FormatMemoryAsync` reflects this — it loads every entry for the project regardless of `agent_role` and splices the whole set into both the Planner's and Developer's prompts. The `agent_role` column still exists (the API always writes `Planner` as a stable default when creating an entry, [[012-API]]), but nothing reads it as a filter — it's a vestige of the original per-role design, not a boundary anyone relies on.
+
+Editable directly per-project via the frontend's project sidebar → edit dialog ([[013-Frontend]]), not just written by agents — the founder can seed memory (or correct/delete an agent's note) without a database client.
 
 ## 8. Agent-to-Tool Contract
 

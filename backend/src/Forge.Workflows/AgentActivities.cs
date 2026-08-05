@@ -94,6 +94,24 @@ public static class AgentActivities
     private static string Truncate(string text, int maxLength) =>
         text.Length <= maxLength ? text : text[..maxLength] + "…";
 
+    // docs/005-Agents.md §7 - shared project memory (AgentMemory), read by every role
+    // regardless of which role originally wrote an entry (per the founder's framing:
+    // it's the project's memory, not the Planner's or Developer's). Returns a block
+    // ready to splice into a prompt, or a note that there's nothing recorded yet -
+    // never an empty string, so the prompt always explains what the section means.
+    private static async Task<string> FormatMemoryAsync(ForgeDbContext db, Guid projectId)
+    {
+        var entries = await db.AgentMemories
+            .AsNoTracking()
+            .Where(m => m.ProjectId == projectId)
+            .OrderBy(m => m.Key)
+            .ToListAsync();
+
+        return entries.Count == 0
+            ? "(no shared project memory recorded yet)"
+            : string.Join("\n", entries.Select(e => $"- {e.Key}: {e.Value}"));
+    }
+
     private static async Task RecordEventAsync(ForgeDbContext db, Guid taskId, string type, AgentRole actorRole, object? payload = null)
     {
         db.Events.Add(new DomainEvent
@@ -141,9 +159,15 @@ public static class AgentActivities
         await RecordEventAsync(db, taskId, "PlannerInvokingModel", AgentRole.Planner,
             new { message = $"Reading {localPath} and analyzing \"{task.Title}\"..." });
 
+        var memory = await FormatMemoryAsync(db, task.ProjectId);
         var prompt = $$"""
             You are the Planner agent inside Forge, an AI-native software factory.
             A task was created with only this title: "{{task.Title}}"
+
+            Shared project memory (notes accumulated across prior tasks on this
+            project - conventions, decisions, gotchas; treat as authoritative context
+            alongside the repository itself):
+            {{memory}}
 
             Investigate the repository in the current working directory to understand
             enough context to plan this task. Then decide one of two things:
@@ -292,9 +316,15 @@ public static class AgentActivities
             ? string.Join("\n", task.AcceptanceCriteria.Select(c => $"- {c.Description}"))
             : "(none recorded - use judgment based on the description)";
 
+        var memory = await FormatMemoryAsync(db, task.ProjectId);
         var prompt = $$"""
             You are the Developer agent inside Forge. You are on a dedicated git branch
             in a real checkout - it is safe to edit files here.
+
+            Shared project memory (notes accumulated across prior tasks on this
+            project - conventions, decisions, gotchas; treat as authoritative context
+            alongside the repository itself):
+            {{memory}}
 
             Title: {{task.Title}}
             Description: {{task.Description}}

@@ -17,10 +17,27 @@ export type TaskState = (typeof TASK_STATES)[number]
 export interface Project {
   id: string
   name: string
+  // Short uppercase code used to build every task's tag ("FORGE-42") - see
+  // Project.Prefix in the backend. Immutable once tasks reference it.
+  prefix: string
+  nextTaskNumber: number
   repositoryUrl: string
   rootBranch: string
   gitProviderPluginId: string
+  localPath: string | null
+  publishRecipe: string | null
   createdAt: string
+}
+
+// docs/005-Agents.md §7 - project-wide shared memory, read by every agent role
+// regardless of which role wrote a given entry.
+export interface MemoryEntry {
+  id: string
+  projectId: string
+  agentRole: string
+  key: string
+  value: string
+  updatedAt: string
 }
 
 export interface AcceptanceCriterion {
@@ -51,6 +68,9 @@ export interface Run {
 export interface TaskItem {
   id: string
   projectId: string
+  // Per-project sequential number - combine with the owning Project's `prefix`
+  // ("FORGE" + "-" + number) to render the task's tag.
+  number: number
   title: string
   description: string | null
   state: TaskState
@@ -78,6 +98,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listProjects: () => request<Project[]>('/projects'),
+  getProject: (projectId: string) => request<Project>(`/projects/${projectId}`),
+  updateProject: (
+    projectId: string,
+    patch: Partial<Pick<Project, 'name' | 'repositoryUrl' | 'rootBranch' | 'localPath'>>,
+  ) =>
+    request<Project>(`/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  getProjectMemory: (projectId: string) => request<MemoryEntry[]>(`/projects/${projectId}/memory`),
+  setMemoryEntry: (projectId: string, key: string, value: string) =>
+    request<void>(`/projects/${projectId}/memory`, {
+      method: 'PUT',
+      body: JSON.stringify({ key, value }),
+    }),
+  deleteMemoryEntry: (projectId: string, key: string) =>
+    request<void>(`/projects/${projectId}/memory/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+    }),
   listTasks: (projectId?: string) =>
     request<TaskItem[]>(`/tasks${projectId ? `?projectId=${projectId}` : ''}`),
   createTask: (projectId: string, title: string) =>
