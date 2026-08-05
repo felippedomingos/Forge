@@ -20,7 +20,11 @@ Console.WriteLine($"Connected to Temporal at {targetHost}");
 
 using var worker = new TemporalWorker(client, new TemporalWorkerOptions("forge-task-queue")
 {
-    Workflows = { WorkflowDefinition.Create(typeof(TaskWorkflow)) },
+    Workflows =
+    {
+        WorkflowDefinition.Create(typeof(TaskWorkflow)),
+        WorkflowDefinition.Create(typeof(BacklogSchedulerWorkflow)),
+    },
     Activities =
     {
         ActivityDefinition.Create(AgentActivities.PlanAsync),
@@ -29,6 +33,7 @@ using var worker = new TemporalWorker(client, new TemporalWorkerOptions("forge-t
         ActivityDefinition.Create(AgentActivities.GitFinalizeAsync),
         ActivityDefinition.Create(AgentActivities.PrioritizeAsync),
         ActivityDefinition.Create(PersistenceActivities.PersistTaskStateAsync),
+        ActivityDefinition.Create(SchedulingActivities.GetSchedulingSnapshotAsync),
     }
 });
 

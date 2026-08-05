@@ -50,7 +50,7 @@ static string WorkflowIdFor(Guid taskId) => $"task-{taskId}";
 app.MapGet("/projects", async (ForgeDbContext db) =>
     await db.Projects.AsNoTracking().ToListAsync());
 
-app.MapPost("/projects", async (ForgeDbContext db, CreateProjectRequest request) =>
+app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, CreateProjectRequest request) =>
 {
     var project = new Project
     {
@@ -63,6 +63,13 @@ app.MapPost("/projects", async (ForgeDbContext db, CreateProjectRequest request)
     };
     db.Projects.Add(project);
     await db.SaveChangesAsync();
+
+    // docs/006-Scheduler.md §1: one BacklogSchedulerWorkflow per project, started once
+    // here rather than lazily - it's a long-running loop, not a per-request thing.
+    await temporal.StartWorkflowAsync(
+        (BacklogSchedulerWorkflow wf) => wf.RunAsync(project.Id),
+        new WorkflowOptions($"scheduler-{project.Id}", TaskQueue));
+
     return Results.Created($"/projects/{project.Id}", project);
 });
 
@@ -130,9 +137,10 @@ app.MapPost("/tasks/{id:guid}/answers", async (ForgeDbContext db, TemporalClient
     return Results.Ok();
 });
 
-// Stand-in for docs/006-Scheduler.md's BacklogSchedulerWorkflow, which doesn't exist
-// yet - promotes a single task by hand rather than by priority-ordered automatic
-// scheduling. Remove once that workflow is implemented.
+// Manual override now that BacklogSchedulerWorkflow exists (it normally promotes tasks
+// itself, priority-ordered, every few seconds) - harmless to call since
+// PromoteToTodoAsync guards on state==Backlog. Useful for tests/demos that don't want
+// to wait for the scheduler's poll interval.
 app.MapPost("/tasks/{id:guid}/promote", async (TemporalClient temporal, Guid id) =>
 {
     var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
