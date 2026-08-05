@@ -94,7 +94,10 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
 
   return (
     <Sheet open={!!taskId} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-lg">
+      {/* Founder feedback: fine for this to take up real space while tracking a live
+          run - up to half the screen on wide viewports, not the narrow fixed width
+          dialogs use. */}
+      <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-[50vw]">
         {!task && (
           <div className="flex flex-col gap-4 p-6">
             <Skeleton className="h-6 w-3/4" />

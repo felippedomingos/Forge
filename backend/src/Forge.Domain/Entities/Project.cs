@@ -30,6 +30,17 @@ public class Project
     // "restartTargets"/"healthCheckUrl" are accepted by the shape but not exercised,
     // since no test project has a real running service to restart/poll.
     public string? PublishRecipe { get; set; }
+    // Founder-requested simplification of docs/009-MCP.md §4's original "per-role tool
+    // scoping" idea: rather than a scoping policy, a single per-project trust flag. When
+    // true, the Developer/Deploy agents get Claude Code CLI's full
+    // `--permission-mode bypassPermissions` (ADR-0005) - the only way they can edit
+    // files or run shell commands at all in a headless subprocess with no human to
+    // click "allow." When false, those two roles refuse to touch the filesystem/shell
+    // for this project's tasks and route to Blocked/DeployFailed with an explicit
+    // reason instead of silently no-op'ing or guessing - see AgentActivities.
+    // Defaults false: a newly created project has to be explicitly marked trusted
+    // before an agent can run destructive operations against it.
+    public bool AllowAgentBypassPermissions { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
     public Plugin? GitProviderPlugin { get; set; }

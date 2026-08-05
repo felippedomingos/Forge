@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectContent,
@@ -37,6 +38,7 @@ export function CreateProjectDialog() {
   const [rootBranch, setRootBranch] = useState('main')
   const [localPath, setLocalPath] = useState('')
   const [pluginId, setPluginId] = useState('')
+  const [allowBypass, setAllowBypass] = useState(false)
 
   const pluginsQuery = useQuery({ queryKey: ['plugins'], queryFn: api.listPlugins, enabled: open })
   const plugins = pluginsQuery.data ?? []
@@ -54,6 +56,7 @@ export function CreateProjectDialog() {
         rootBranch,
         gitProviderPluginId: pluginId,
         localPath: localPath || undefined,
+        allowAgentBypassPermissions: allowBypass,
       }),
     onSuccess: () => {
       toast.success('Project created.')
@@ -62,6 +65,7 @@ export function CreateProjectDialog() {
       setRepositoryUrl('')
       setRootBranch('main')
       setLocalPath('')
+      setAllowBypass(false)
       setOpen(false)
       queryClient.invalidateQueries({ queryKey: ['projects'] })
     },
@@ -148,6 +152,18 @@ export function CreateProjectDialog() {
             <p className="text-xs text-muted-foreground">
               Leave empty to configure later — but tasks will stay Blocked until it's set.
             </p>
+          </div>
+
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-border/60 p-2.5">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="new-proj-bypass">Allow agent bypass permissions</Label>
+              <p className="text-xs text-muted-foreground">
+                Required for the Developer/Deploy agents to actually edit files or run
+                commands here — otherwise every task stays Blocked before touching this
+                project. Only enable for a project you trust with unattended writes.
+              </p>
+            </div>
+            <Switch id="new-proj-bypass" checked={allowBypass} onCheckedChange={setAllowBypass} />
           </div>
         </div>
 

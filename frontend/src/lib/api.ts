@@ -26,6 +26,10 @@ export interface Project {
   gitProviderPluginId: string
   localPath: string | null
   publishRecipe: string | null
+  // Founder-requested trust gate (docs/009-MCP.md §4's per-role scoping idea,
+  // simplified to one flag): Developer/Deploy refuse to touch the filesystem/shell
+  // for this project's tasks unless it's true - see AgentActivities on the backend.
+  allowAgentBypassPermissions: boolean
   createdAt: string
 }
 
@@ -142,6 +146,7 @@ export const api = {
     rootBranch: string
     gitProviderPluginId: string
     localPath?: string
+    allowAgentBypassPermissions?: boolean
   }) =>
     request<Project>('/projects', {
       method: 'POST',
@@ -149,7 +154,9 @@ export const api = {
     }),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, 'name' | 'repositoryUrl' | 'rootBranch' | 'localPath'>>,
+    patch: Partial<
+      Pick<Project, 'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions'>
+    >,
   ) =>
     request<Project>(`/projects/${projectId}`, {
       method: 'PATCH',

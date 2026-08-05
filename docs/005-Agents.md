@@ -31,7 +31,7 @@ All five roles run against a single provider at v1 (Claude, per [[ADR-0003]]) th
 
 - **Trigger**: `WorkerAllocated` — the task was promoted to `Todo` and a Worker slot is free ([[003-Domain]] row 5).
 - **Inputs**: `Task.description`, acceptance criteria, sub-tasks, `Project.repository_url` / `root_branch`, shared project memory (§7).
-- **Tools**: Git worktree/branch operations via the GitHub plugin ([[ADR-0002]]), filesystem read/write scoped to its Worktree, terminal (build/test), and any additional MCP servers a project's stack requires.
+- **Tools**: Git worktree/branch operations via the GitHub plugin ([[ADR-0002]]), filesystem read/write scoped to its Worktree, terminal (build/test), and any additional MCP servers a project's stack requires. **Gated on `Project.AllowAgentBypassPermissions`** ([[003-Domain]] §1, [[009-MCP]] §4) — refuses outright (`DeveloperNeedsClarification` → `Blocked`, explaining why) for any project not explicitly marked trusted, since editing files at all in a headless subprocess requires Claude Code CLI's full permission bypass (no human present to click "allow" - [[adr/ADR-0005]]).
 - **Clarifying the founder's original spec — when does the Developer agent commit?** The original flow only mentions git commit/push/PR at the final `Done` step (owned by the Git agent, §5). Read literally, that would mean zero git history exists until after human review, which is bad practice for anything but a trivial change. **Decision**: the Developer agent commits to its local branch inside the worktree as it works, for its own checkpointing and to leave a real history — these commits stay local (not pushed) until the Git agent's stage. The Git agent (§5) owns *pushing* that branch and opening the PR, not the act of committing itself. This preserves the founder's intent (nothing reaches the remote/PR stage before `Done`) while not requiring an agent to hold hours of uncommitted work in a worktree.
 - **Outputs**: `DeveloperCompleted` (→ `AwaitingPublish`, build/tests pass) or `DeveloperNeedsClarification` (→ `Blocked`, per [[004-Workflow]] §3 — re-entry always goes through `Inbox`, resuming against the *same* worktree rather than recreating it).
 - **Live trace**: every meaningful step (file read, command run, reasoning checkpoint) is surfaced incrementally, not just at completion — see [[000-Vision]] UC-9 and [[007-ExecutionEngine]] for the streaming mechanism.
@@ -39,8 +39,8 @@ All five roles run against a single provider at v1 (Claude, per [[ADR-0003]]) th
 ## 5. Deploy Agent
 
 - **Trigger**: `UserRequestedPublish` — the human moved the task from `AwaitingPublish` to `Publish`.
-- **Inputs**: the Task's worktree/branch, and the Project's publish configuration — **not yet specified**: how Forge knows *how* to publish a given project locally (restart a Docker Compose stack? run `dotnet publish` and copy artifacts? run a specific migration tool?) needs a concrete concept, tentatively a `PublishRecipe` per Project. This is flagged here as a gap to resolve in [[015-Deployment]], not invented in this document.
-- **Tools**: terminal, DB migration tooling, Docker (restart/rebuild), health-check calls.
+- **Inputs**: the Task's worktree/branch, and the Project's `PublishRecipe` ([[015-Deployment]] §2-3 — resolved, not a gap anymore: `migrationCommand`, `restartTargets` via `docker compose restart`, and `healthCheckUrl` polling, in that order).
+- **Tools**: terminal, DB migration tooling, Docker (restart/rebuild), health-check calls. **Gated on `Project.AllowAgentBypassPermissions`**, same reasoning as the Developer agent (§4) — `migrationCommand`/`restartTargets` are arbitrary shell execution, refused outright for an untrusted project.
 - **Outputs**: `DeployCompleted` (→ `Review`) or `DeployFailed` (→ `AwaitingPublish`, per [[004-Workflow]] §5 — no auto-retry, human re-triggers after inspecting).
 
 ## 6. Git Agent

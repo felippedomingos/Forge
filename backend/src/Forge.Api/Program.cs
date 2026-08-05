@@ -110,6 +110,7 @@ app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, Crea
         RootBranch = request.RootBranch,
         GitProviderPluginId = request.GitProviderPluginId,
         LocalPath = string.IsNullOrWhiteSpace(request.LocalPath) ? null : request.LocalPath,
+        AllowAgentBypassPermissions = request.AllowAgentBypassPermissions,
         CreatedAt = DateTimeOffset.UtcNow
     };
     db.Projects.Add(project);
@@ -141,6 +142,7 @@ app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdatePro
     if (request.RepositoryUrl is not null) project.RepositoryUrl = request.RepositoryUrl;
     if (request.RootBranch is not null) project.RootBranch = request.RootBranch;
     if (request.LocalPath is not null) project.LocalPath = request.LocalPath;
+    if (request.AllowAgentBypassPermissions is { } allowBypass) project.AllowAgentBypassPermissions = allowBypass;
     await db.SaveChangesAsync();
     return Results.Ok(project);
 });
@@ -398,6 +400,33 @@ app.MapPost("/tasks/{id:guid}/promote", async (TemporalClient temporal, Guid id)
     return Results.Ok();
 });
 
+// docs/012-API.md - recovers a Task whose workflow never got a chance to drive it: the
+// documented gap in POST /tasks (row insert + StartWorkflowAsync aren't one
+// transaction - a crash between the two, or a Worker outage right at creation, leaves
+// the row with no workflow behind it), or a workflow that failed outright and won't
+// retry itself (Temporal's WORKFLOW_EXECUTION_FAILED is terminal). Only for a task
+// with no currently-running workflow - the default WorkflowIdReusePolicy already
+// refuses to start a duplicate over one that's still open, so this can't accidentally
+// clobber a task that's actually being worked.
+app.MapPost("/tasks/{id:guid}/resume", async (ForgeDbContext db, TemporalClient temporal, Guid id) =>
+{
+    var task = await db.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id);
+    if (task is null) return Results.NotFound();
+
+    try
+    {
+        await temporal.StartWorkflowAsync(
+            (TaskWorkflow wf) => wf.RunAsync(task.Id),
+            new WorkflowOptions(WorkflowIdFor(task.Id), TaskQueue));
+    }
+    catch (Temporalio.Exceptions.WorkflowAlreadyStartedException)
+    {
+        return Results.Conflict(new { error = "This task's workflow is already running - nothing to resume." });
+    }
+
+    return Results.Ok();
+});
+
 app.MapPost("/tasks/{id:guid}/move", async (TemporalClient temporal, Guid id, MoveTaskRequest request) =>
 {
     var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
@@ -422,8 +451,8 @@ app.Run();
 
 // docs/012-API.md §2 request shapes - kept next to Program.cs at this skeleton stage,
 // move to their own files once the API grows past this first slice.
-record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath);
-record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath);
+record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath, bool AllowAgentBypassPermissions = false);
+record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath, bool? AllowAgentBypassPermissions);
 // Description is optional, user-provided seed context at creation time (may include a
 // link) - distinct from the Planner-authored Task.Description that AgentActivities.
 // PlanAsync overwrites once it finishes (docs/005-Agents.md §2). Not the same field

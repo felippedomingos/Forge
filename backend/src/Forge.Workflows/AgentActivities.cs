@@ -11,12 +11,8 @@ public record PlannerResult(bool NeedsClarification, string? Description, List<s
 public record DeveloperResult(bool NeedsClarification, List<string> Questions);
 public record DeployResult(bool Success, string? Error);
 
-// docs/005-Agents.md - one static activity per agent role.
-// Planner, Developer and Git are REAL (docs/adr/ADR-0005 - Claude Code CLI subprocess,
-// plus real git/gh operations via GitOps). Deploy remains a stub: it needs the
-// PublishRecipe concept (docs/015-Deployment.md §2) implemented first - there's no
-// concrete answer yet for "how does Forge publish project X locally," so DeployAsync
-// doesn't pretend to have one.
+// docs/005-Agents.md - one static activity per agent role. All 5 roles are real, per
+// docs/016-Roadmap.md - none of these are stubs.
 public static class AgentActivities
 {
     private static string ConnectionString =>
@@ -27,6 +23,10 @@ public static class AgentActivities
         .UseNpgsql(ConnectionString)
         .UseSnakeCaseNamingConvention()
         .Options);
+
+    // docs/015-Deployment.md §3 - healthCheckUrl polling only, never mutating; no auth
+    // headers or custom config needed for a plain GET-and-check-2xx probe.
+    private static readonly HttpClient HealthCheckClient = new() { Timeout = TimeSpan.FromSeconds(10) };
 
     private static readonly JsonSerializerOptions LlmJsonOptions = new()
     {
@@ -250,8 +250,9 @@ public static class AgentActivities
     // docs/005-Agents.md §4. Real implementation: sync root branch, create/reuse
     // worktree (docs/007-ExecutionEngine.md §2), then run the same ClaudeCliProvider
     // the Planner uses, but pointed at the worktree with bypassPermissions=true so it
-    // can actually edit files - see ClaudeCliProvider.InvokeAsync's doc comment for why
-    // that's acceptable only against the disposable sandbox project.
+    // can actually edit files. Gated on Project.AllowAgentBypassPermissions (below) -
+    // refuses outright for any project not explicitly marked trusted, rather than
+    // relying on "only ever pointed at the sandbox" as the sole safeguard.
     [Activity]
     public static async Task<DeveloperResult> DevelopAsync(Guid taskId)
     {
@@ -269,6 +270,20 @@ public static class AgentActivities
         }
 
         await RecordEventAsync(db, taskId, "DeveloperStarted", AgentRole.Developer);
+
+        // Founder-requested trust gate (Project.AllowAgentBypassPermissions): editing
+        // files at all in a headless subprocess requires bypassPermissions (ADR-0005 -
+        // there's no human to click "allow"), so an untrusted project must refuse
+        // outright rather than silently no-op or (worse) let the model report
+        // "success" over a write that was actually denied.
+        if (!task.Project.AllowAgentBypassPermissions)
+        {
+            await RecordEventAsync(db, taskId, "DeveloperNeedsClarification", AgentRole.Developer,
+                new { reason = "project not marked as trusted for autonomous execution" });
+            return new DeveloperResult(true, [
+                $"Project '{task.Project.Name}' isn't marked as trusted for autonomous code execution - enable \"Allow agent bypass permissions\" in the project's edit dialog before the Developer agent can write to it."
+            ]);
+        }
 
         var localPath = task.Project.LocalPath;
         if (string.IsNullOrWhiteSpace(localPath) || !Directory.Exists(localPath))
@@ -416,13 +431,56 @@ public static class AgentActivities
         // implemented yet either) - this field only exists for the frontend button.
         [property: JsonPropertyName("previewUrl")] string? PreviewUrl);
 
-    // docs/005-Agents.md §5, docs/015-Deployment.md §2/§3. Real implementation, but
-    // deliberately partial: only `migrationCommand` is executed. `restartTargets` and
-    // `healthCheckUrl` are accepted by the schema but not exercised - no test project
-    // has a real running service to restart or poll yet, and building that logic
-    // against nothing to verify it against would be guessing at a shape rather than
-    // implementing one. Runs inside the task's Worktree (the branch under review), not
-    // the canonical clone, since that's where the actual change under test lives.
+    private static async Task<(bool Success, string Output)> RunShellAsync(string workingDirectory, string command)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "/bin/bash",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(command);
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var stdout = await process.StandardOutput.ReadToEndAsync();
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        return (process.ExitCode == 0, process.ExitCode == 0 ? stdout : stderr);
+    }
+
+    // docs/015-Deployment.md §3 - polls up to ~30s (10 attempts, 3s apart) rather than
+    // a single check, since a just-restarted service typically isn't accepting
+    // connections for the first second or two.
+    private static async Task<bool> PollHealthCheckAsync(string url)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                var response = await HealthCheckClient.GetAsync(url);
+                if (response.IsSuccessStatusCode) return true;
+            }
+            catch (Exception) when (attempt < 9)
+            {
+                // Connection refused/reset while the service is still coming up -
+                // expected during the first few attempts, not a reason to give up yet.
+            }
+            await Task.Delay(TimeSpan.FromSeconds(3));
+        }
+        return false;
+    }
+
+    // docs/005-Agents.md §5, docs/015-Deployment.md §2/§3. Runs `migrationCommand`,
+    // then each `restartTargets` entry as `docker compose restart <target>` (the shape
+    // the recipe documents - "Docker Compose service names to restart, in order"),
+    // then polls `healthCheckUrl` before declaring success - the full recipe, not just
+    // the migration step. Gated on Project.AllowAgentBypassPermissions, same reasoning
+    // as DevelopAsync: this executes arbitrary shell commands unattended, which needs
+    // the same explicit per-project trust as editing files does.
     [Activity]
     public static async Task<DeployResult> DeployAsync(Guid taskId)
     {
@@ -457,11 +515,21 @@ public static class AgentActivities
             return new DeployResult(false, "Invalid PublishRecipe JSON.");
         }
 
-        if (string.IsNullOrWhiteSpace(recipe?.MigrationCommand))
+        var hasMigration = !string.IsNullOrWhiteSpace(recipe?.MigrationCommand);
+        var hasRestarts = recipe?.RestartTargets is { Count: > 0 };
+        if (!hasMigration && !hasRestarts)
         {
             await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy,
-                new { note = "PublishRecipe has no migrationCommand - nothing to run." });
+                new { note = "PublishRecipe has no migrationCommand or restartTargets - nothing to run." });
             return new DeployResult(true, null);
+        }
+
+        if (!task.Project.AllowAgentBypassPermissions)
+        {
+            await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                new { reason = "project not marked as trusted for autonomous execution" });
+            return new DeployResult(false,
+                $"Project '{task.Project.Name}' isn't marked as trusted for autonomous code execution - enable \"Allow agent bypass permissions\" before Deploy can run its recipe.");
         }
 
         var runDirectory = task.Worktree is { DeletedAt: null } wt && Directory.Exists(wt.Path)
@@ -475,27 +543,41 @@ public static class AgentActivities
             return new DeployResult(false, "No directory to run the PublishRecipe against.");
         }
 
-        var psi = new System.Diagnostics.ProcessStartInfo
+        if (hasMigration)
         {
-            FileName = "/bin/bash",
-            WorkingDirectory = runDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(recipe.MigrationCommand);
+            var (success, output) = await RunShellAsync(runDirectory, recipe!.MigrationCommand!);
+            await RecordEventAsync(db, taskId, success ? "DeployMigrationCompleted" : "DeployFailed", AgentRole.Deploy,
+                new { command = recipe.MigrationCommand, output = Truncate(output, 1000) });
+            if (!success) return new DeployResult(false, Truncate(output, 500));
+        }
 
-        using var process = System.Diagnostics.Process.Start(psi)!;
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        if (hasRestarts)
+        {
+            foreach (var target in recipe!.RestartTargets!)
+            {
+                var (success, output) = await RunShellAsync(runDirectory, $"docker compose restart {target}");
+                await RecordEventAsync(db, taskId, success ? "DeployRestartCompleted" : "DeployFailed", AgentRole.Deploy,
+                    new { target, output = Truncate(output, 1000) });
+                if (!success) return new DeployResult(false, $"Failed to restart '{target}': {Truncate(output, 500)}");
+            }
+        }
 
-        var success = process.ExitCode == 0;
-        await RecordEventAsync(db, taskId, success ? "DeployCompleted" : "DeployFailed", AgentRole.Deploy,
-            new { command = recipe.MigrationCommand, output = Truncate(success ? stdout : stderr, 1000) });
+        if (!string.IsNullOrWhiteSpace(recipe?.HealthCheckUrl))
+        {
+            var healthy = await PollHealthCheckAsync(recipe.HealthCheckUrl);
+            await RecordEventAsync(db, taskId, healthy ? "DeployHealthCheckPassed" : "DeployFailed", AgentRole.Deploy,
+                new { url = recipe.HealthCheckUrl, healthy });
+            if (!healthy)
+                return new DeployResult(false, $"Health check at {recipe.HealthCheckUrl} never returned a successful status.");
+        }
 
-        return new DeployResult(success, success ? null : Truncate(stderr, 500));
+        await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy, new
+        {
+            ranMigration = hasMigration,
+            restartedTargets = recipe?.RestartTargets ?? [],
+            healthChecked = !string.IsNullOrWhiteSpace(recipe?.HealthCheckUrl),
+        });
+        return new DeployResult(true, null);
     }
 
     // docs/005-Agents.md §6 - push + PR creation. Branches on the Project's

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import {
   Dialog,
@@ -42,6 +43,7 @@ export function ProjectEditDialog({
   const [rootBranch, setRootBranch] = useState(project.rootBranch)
   const [localPath, setLocalPath] = useState(project.localPath ?? '')
   const [previewUrl, setPreviewUrl] = useState(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
+  const [allowBypass, setAllowBypass] = useState(project.allowAgentBypassPermissions)
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -53,6 +55,7 @@ export function ProjectEditDialog({
     setRootBranch(project.rootBranch)
     setLocalPath(project.localPath ?? '')
     setPreviewUrl(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
+    setAllowBypass(project.allowAgentBypassPermissions)
     setConfirmingDelete(false)
   }, [open, project])
 
@@ -68,7 +71,14 @@ export function ProjectEditDialog({
   }
 
   const saveDetails = useMutation({
-    mutationFn: () => api.updateProject(project.id, { name, repositoryUrl, rootBranch, localPath: localPath || null }),
+    mutationFn: () =>
+      api.updateProject(project.id, {
+        name,
+        repositoryUrl,
+        rootBranch,
+        localPath: localPath || null,
+        allowAgentBypassPermissions: allowBypass,
+      }),
     onSuccess: () => {
       toast.success('Project updated.')
       invalidate()
@@ -166,6 +176,18 @@ export function ProjectEditDialog({
               value={localPath}
               onChange={(e) => setLocalPath(e.target.value)}
             />
+          </div>
+
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-border/60 p-2.5">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="proj-bypass">Allow agent bypass permissions</Label>
+              <p className="text-xs text-muted-foreground">
+                Required for the Developer/Deploy agents to actually edit files or run
+                commands here — otherwise every task stays Blocked before touching this
+                project. Only enable for a project you trust with unattended writes.
+              </p>
+            </div>
+            <Switch id="proj-bypass" checked={allowBypass} onCheckedChange={setAllowBypass} />
           </div>
 
           <Button
