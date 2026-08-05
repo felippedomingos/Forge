@@ -81,6 +81,17 @@ export interface AcceptanceCriterion {
   satisfied: boolean
 }
 
+// Free-form, per-project label distinct from the auto-assigned {prefix}-{number} task
+// tag - see backend Tag entity. Many-to-many with TaskItem via /tasks/{id}/tags.
+export interface Tag {
+  id: string
+  projectId: string
+  name: string
+  // Hex color (e.g. "#3B82F6") - rendered directly as a badge's background.
+  color: string
+  createdAt: string
+}
+
 export interface TaskEvent {
   id: string
   type: string
@@ -119,6 +130,7 @@ export interface TaskItem {
   updatedAt: string
   acceptanceCriteria?: AcceptanceCriterion[]
   runs?: Run[]
+  tags?: Tag[]
 }
 
 const BASE_URL = '/api'
@@ -228,6 +240,27 @@ export const api = {
       body: JSON.stringify({ comment }),
     }),
   getTask: (taskId: string) => request<TaskItem>(`/tasks/${taskId}`),
+  // Founder-requested (docs/013-Frontend.md) - free-form per-project labels, CRUD
+  // scoped to a Project; assignment onto a Task is the separate pair below.
+  listProjectTags: (projectId: string) => request<Tag[]>(`/projects/${projectId}/tags`),
+  createTag: (projectId: string, name: string, color: string) =>
+    request<Tag>(`/projects/${projectId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ name, color }),
+    }),
+  updateTag: (tagId: string, patch: { name?: string; color?: string }) =>
+    request<Tag>(`/tags/${tagId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteTag: (tagId: string) => request<void>(`/tags/${tagId}`, { method: 'DELETE' }),
+  assignTag: (taskId: string, tagId: string) =>
+    request<Tag[]>(`/tasks/${taskId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tagId }),
+    }),
+  removeTag: (taskId: string, tagId: string) =>
+    request<void>(`/tasks/${taskId}/tags/${tagId}`, { method: 'DELETE' }),
   // docs/000-Vision.md UC-9 - the task detail view's event timeline. Polling stands in
   // for the WebSocket channel docs/007-ExecutionEngine.md §4 still describes as the
   // target mechanism.
