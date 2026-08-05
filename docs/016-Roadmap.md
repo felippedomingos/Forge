@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — updated 2026-08-05, after the project CRUD / drag-and-drop / Azure DevOps pass
+Draft — updated 2026-08-05, after the JWT auth / real deploy-recipe / trust-gate pass
 
 ## MVP
 
@@ -25,8 +25,18 @@ Draft — updated 2026-08-05, after the project CRUD / drag-and-drop / Azure Dev
 - [x] Drag-and-drop actually works end-to-end (was reported broken — the whole card is the drag surface now, not a tiny hover-only handle) — [[013-Frontend]] §3.
 - [x] **`Project.AllowAgentBypassPermissions` trust gate** — founder-requested simplification of the per-role MCP scoping idea into one per-project bool. Developer/Deploy both refuse outright (`Blocked`/`DeployFailed` with an explicit reason) for any project not explicitly marked trusted; false by default on new projects. `Scheduler Test Project` (the sandbox) marked trusted since it's been running write operations all session; `Forge` (the real repo) stays untrusted.
 - [x] **`restartTargets`/`healthCheckUrl` in `PublishRecipe` now implemented** ([[015-Deployment]] §2-3) — `docker compose restart` per target, then health-check polling, both gated on the trust flag above. Built correctly, not yet exercised against a real long-running service (no current project has one configured).
-- [ ] **Basic AuthN so the API isn't fully open** ([[014-Security]] §1) — still nothing here, still the single largest gap between "works for me" and "works for a team." **Founder has confirmed this should be built next** (real multi-user need) — scope (session-based vs token, how `User.Role` maps to permissions) to be nailed down before implementation starts.
-- [ ] Azure DevOps push/PR is implemented against `az repos pr create`'s documented shape but **not yet exercised against a real PR** ([[010-Plugins]] §5) — founder plans to test this against a real project shortly.
+- [x] **AuthN — JWT bearer auth, admin-created accounts** ([[adr/ADR-0006]], [[014-Security]] §1). Global default-deny (every endpoint requires a valid token except `/auth/login`/`/auth/bootstrap`), `POST /users` is Admin-only, WebSocket auth via `?access_token=`. Validated live end-to-end (bootstrap, login, wrong-password rejection, re-bootstrap blocked, authenticated WS handshake, logout). No refresh-token rotation and no password-reset flow yet - deliberate v1 simplifications, not oversights.
+- [ ] Azure DevOps push/PR is implemented against `az repos pr create`'s documented shape but **not yet exercised against a real PR** ([[010-Plugins]] §5) — founder testing this against a real project next.
+
+### What's left after that
+
+Everything else in this MVP section is done. What remains, roughly in order a founder-only, single-machine deployment would hit it:
+
+- **Per-project shell/write trust is coarse** (`Project.AllowAgentBypassPermissions` is one bool, not scoped tool-by-tool) — fine today, revisit only if a project needs "can write files but not run arbitrary shell" or similar finer distinctions ([[009-MCP]] §4, [[014-Security]] §4).
+- **`restartTargets`/`healthCheckUrl` are unvalidated against a real long-running service** — built correctly, no project has one configured yet to prove it against ([[015-Deployment]] §2).
+- **AuthZ is a single coarse Admin/non-Admin check**, no per-project permissions - fine for one small team, would need real design work before a second organization/tenant ever uses this.
+- **Real dedicated infrastructure** ([[ADR-0004]]) still doesn't exist - Forge runs entirely on the founder's own machine, substituting for it.
+- Everything in v2/v3/v4 below - none of it is blocking, none of it has been asked for yet.
 
 ## v2
 
