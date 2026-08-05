@@ -100,6 +100,16 @@ export interface Run {
   startedAt: string
 }
 
+export interface Worktree {
+  id: string
+  taskId: string
+  projectId: string
+  path: string
+  branchName: string
+  createdAt: string
+  deletedAt: string | null
+}
+
 export interface TaskItem {
   id: string
   projectId: string
@@ -119,6 +129,7 @@ export interface TaskItem {
   updatedAt: string
   acceptanceCriteria?: AcceptanceCriterion[]
   runs?: Run[]
+  worktree?: Worktree | null
 }
 
 const BASE_URL = '/api'
