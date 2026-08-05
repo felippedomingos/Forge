@@ -459,6 +459,30 @@ app.MapGet("/tasks/{id:guid}", async (ForgeDbContext db, Guid id) =>
         ? Results.Ok(task)
         : Results.NotFound());
 
+// Mirrors DELETE /projects/{id} above: cascades at the DB level (sub_tasks,
+// acceptance_criteria, runs, events are all DeleteBehavior.Cascade under Task) and
+// best-effort terminates the task's TaskWorkflow so deleting a task doesn't leave an
+// orphaned execution parked indefinitely.
+app.MapDelete("/tasks/{id:guid}", async (ForgeDbContext db, TemporalClient temporal, Guid id) =>
+{
+    var task = await db.Tasks.FindAsync(id);
+    if (task is null) return Results.NotFound();
+
+    db.Tasks.Remove(task);
+    await db.SaveChangesAsync();
+
+    try
+    {
+        await temporal.GetWorkflowHandle(WorkflowIdFor(id)).TerminateAsync("Task deleted");
+    }
+    catch (Exception)
+    {
+        // Already completed, never started, or otherwise gone - nothing to do.
+    }
+
+    return Results.Ok();
+});
+
 app.MapGet("/tasks/{id:guid}/runs", async (ForgeDbContext db, Guid id) =>
     await db.Runs.AsNoTracking().Where(r => r.TaskId == id).OrderBy(r => r.StartedAt).ToListAsync());
 

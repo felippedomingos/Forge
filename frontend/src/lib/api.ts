@@ -228,6 +228,9 @@ export const api = {
       body: JSON.stringify({ comment }),
     }),
   getTask: (taskId: string) => request<TaskItem>(`/tasks/${taskId}`),
+  // Mirrors deleteProject above - cascades on the backend (sub-tasks, acceptance
+  // criteria, runs, events) and best-effort terminates the task's TaskWorkflow.
+  deleteTask: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),
   // docs/000-Vision.md UC-9 - the task detail view's event timeline. Polling stands in
   // for the WebSocket channel docs/007-ExecutionEngine.md §4 still describes as the
   // target mechanism.
