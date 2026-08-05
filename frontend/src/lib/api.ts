@@ -110,6 +110,10 @@ export interface TaskItem {
   description: string | null
   state: TaskState
   priority: number | null
+  // True once a Product Owner has set `priority` via setTaskPriority - tells the
+  // backend's Prioritizer agent to leave this task's ranking alone on its next run
+  // instead of overwriting it (AgentActivities.PrioritizeAsync).
+  priorityManuallySet: boolean
   branchName: string | null
   // Set once the Git agent actually creates the PR (Review->Done) - docs/003-Domain.md
   // row 9->10, docs/015-Deployment.md §4's Done->Production polling reads this.
@@ -214,6 +218,14 @@ export const api = {
     request<void>(`/tasks/${taskId}/move`, {
       method: 'POST',
       body: JSON.stringify({ targetState }),
+    }),
+  // docs/000-Vision.md's Product Owner persona - a manual override distinct from the
+  // Prioritizer agent's automatic ranking. Only valid while the task is in Backlog
+  // (enforced server-side).
+  setTaskPriority: (taskId: string, priority: number) =>
+    request<TaskItem>(`/tasks/${taskId}/priority`, {
+      method: 'PATCH',
+      body: JSON.stringify({ priority }),
     }),
   answerTask: (taskId: string, answers: string[]) =>
     request<void>(`/tasks/${taskId}/answers`, {

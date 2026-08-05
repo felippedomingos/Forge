@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Circle, DollarSign, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
@@ -28,6 +28,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   const queryClient = useQueryClient()
   const [answerText, setAnswerText] = useState('')
   const [changesComment, setChangesComment] = useState('')
+  const [priorityText, setPriorityText] = useState('')
 
   const taskQuery = useQuery({
     queryKey: ['task', taskId],
@@ -96,6 +97,17 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
       invalidate()
     },
   })
+  // Product Owner manual override (docs/000-Vision.md persona) - distinct from the
+  // Prioritizer agent's automatic ranking. Only ever called while the task is in
+  // Backlog (the section below only renders there); the backend rejects it otherwise.
+  const setPriority = useMutation({
+    mutationFn: (priority: number) => api.setTaskPriority(taskId!, priority),
+    onSuccess: () => {
+      toast.success('Priority updated.')
+      invalidate()
+    },
+    onError: () => toast.error('Failed to update priority.'),
+  })
 
   const task = taskQuery.data
   const events = eventsQuery.data ?? []
@@ -104,6 +116,13 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   const config = task ? STATE_CONFIG[task.state] : null
   const inProgress = task && ['Inbox', 'Executing', 'Publishing'].includes(task.state)
   const totalCost = task?.runs?.reduce((sum, r) => sum + r.costEstimate, 0) ?? 0
+
+  // Reset the editable priority field whenever a different task's data lands - only
+  // task.priority's own identity (not every unrelated refetch) should clobber
+  // whatever the Product Owner is mid-typing.
+  useEffect(() => {
+    setPriorityText(task?.priority?.toString() ?? '')
+  }, [task?.id, task?.priority])
 
   return (
     <Sheet open={!!taskId} onOpenChange={(open) => !open && onClose()}>
@@ -188,9 +207,38 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
               )}
 
               {task.state === 'Backlog' && (
-                <Button size="sm" variant="outline" disabled={promote.isPending} onClick={() => promote.mutate()}>
-                  Promote to Todo →
-                </Button>
+                <section className="flex flex-col gap-2.5">
+                  <Button size="sm" variant="outline" disabled={promote.isPending} onClick={() => promote.mutate()}>
+                    Promote to Todo →
+                  </Button>
+
+                  <div className="flex items-center gap-2">
+                    <label className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                      Priority
+                    </label>
+                    <Input
+                      type="number"
+                      className="h-8 w-20 text-xs"
+                      value={priorityText}
+                      onChange={(e) => setPriorityText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' || priorityText === '') return
+                        setPriority.mutate(Number(priorityText))
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={priorityText === '' || setPriority.isPending}
+                      onClick={() => setPriority.mutate(Number(priorityText))}
+                    >
+                      Set
+                    </Button>
+                    {task.priorityManuallySet && (
+                      <span className="text-[10px] text-muted-foreground">manual override</span>
+                    )}
+                  </div>
+                </section>
               )}
               {task.state === 'AwaitingPublish' && (
                 <Button size="sm" disabled={publish.isPending} onClick={() => publish.mutate()}>

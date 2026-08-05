@@ -676,6 +676,27 @@ app.MapPost("/tasks/{id:guid}/move", async (TemporalClient temporal, Guid id, Mo
     return Results.Ok();
 });
 
+// docs/000-Vision.md's Product Owner/Founder persona - a manual override distinct from
+// AgentActivities.PrioritizeAsync's automatic LLM ranking. Only meaningful in Backlog
+// (Priority stops mattering once SchedulingActivities has already promoted the task out
+// of it), and marks PriorityManuallySet so a later Prioritizer run (triggered by other
+// still-unprioritized tasks in the same project) never overwrites it.
+app.MapPatch("/tasks/{id:guid}/priority", async (ForgeDbContext db, Guid id, SetTaskPriorityRequest request) =>
+{
+    var task = await db.Tasks.FindAsync(id);
+    if (task is null) return Results.NotFound();
+
+    if (task.State != TaskState.Backlog)
+        return Results.BadRequest(new { error = $"Cannot set priority on a task in state {task.State}; only Backlog tasks support manual priority." });
+
+    task.Priority = request.Priority;
+    task.PriorityManuallySet = true;
+    task.UpdatedAt = DateTimeOffset.UtcNow;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(task);
+});
+
 app.Run();
 
 // docs/012-API.md §2 request shapes - kept next to Program.cs at this skeleton stage,
@@ -691,6 +712,7 @@ record CreateTaskRequest(Guid ProjectId, string Title, string? Description);
 record AnswerQuestionsRequest(List<string> Answers);
 record RequestChangesRequest(string Comment);
 record MoveTaskRequest(TaskState TargetState);
+record SetTaskPriorityRequest(int Priority);
 // docs/015-Deployment.md §2 - matches AgentActivities.PublishRecipeDto's shape exactly.
 record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTargets, string? HealthCheckUrl, string? PreviewUrl);
 // docs/005-Agents.md §7 - despite AgentMemory's per-(project,role) schema, the founder
