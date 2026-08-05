@@ -13,7 +13,13 @@ public record ClaudeCliResult(string Text, decimal CostUsd, int InputTokens, int
 // can complete).
 public static class ClaudeCliProvider
 {
-    public static async Task<ClaudeCliResult> InvokeAsync(string prompt, string workingDirectory, CancellationToken ct = default)
+    // bypassPermissions: needed for any agent role that actually edits files or runs
+    // shell commands (Developer, Deploy) since there's no human to click "allow" in a
+    // headless subprocess. Safe ONLY because docs/adr/ADR-0004's sandbox
+    // (felippedomingos/forge-test-sandbox) is disposable and isolated - a real project
+    // would need docs/009-MCP.md §4's per-role tool scoping instead of a blanket
+    // bypass, which is not implemented yet (docs/014-Security.md §4 gap).
+    public static async Task<ClaudeCliResult> InvokeAsync(string prompt, string workingDirectory, bool bypassPermissions = false, CancellationToken ct = default)
     {
         var psi = new ProcessStartInfo
         {
@@ -27,6 +33,11 @@ public static class ClaudeCliProvider
         psi.ArgumentList.Add(prompt);
         psi.ArgumentList.Add("--output-format");
         psi.ArgumentList.Add("json");
+        if (bypassPermissions)
+        {
+            psi.ArgumentList.Add("--permission-mode");
+            psi.ArgumentList.Add("bypassPermissions");
+        }
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start the claude CLI process.");
@@ -68,5 +79,16 @@ public static class ClaudeCliProvider
         return firstNewline > 0 && lastFence > firstNewline
             ? trimmed[(firstNewline + 1)..lastFence].Trim()
             : trimmed;
+    }
+
+    // Found live: an occasional response prepends a sentence before the JSON despite
+    // explicit "respond with ONLY a JSON object" instructions. Rather than failing the
+    // whole activity over one stray sentence, extract the substring between the first
+    // '{' and its matching last '}' and let the caller try parsing that instead.
+    public static string ExtractJsonObject(string text)
+    {
+        var start = text.IndexOf('{');
+        var end = text.LastIndexOf('}');
+        return start >= 0 && end > start ? text[start..(end + 1)] : text;
     }
 }

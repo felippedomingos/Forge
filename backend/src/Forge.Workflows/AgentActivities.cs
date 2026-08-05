@@ -11,13 +11,12 @@ public record PlannerResult(bool NeedsClarification, string? Description, List<s
 public record DeveloperResult(bool NeedsClarification, List<string> Questions);
 public record DeployResult(bool Success, string? Error);
 
-// docs/005-Agents.md - one static activity per agent role. PlanAsync is the first one
-// that's REAL (docs/adr/ADR-0005-claude-code-cli-as-invocation-mechanism.md - calls the
-// Claude Code CLI, not a stub). Developer/Deploy/Git remain stubs: Developer needs real
-// worktree mechanics (docs/007-ExecutionEngine.md §2) wired next; Deploy needs the
-// PublishRecipe concept (docs/015-Deployment.md §2) implemented first; Git needs the
-// plugin push/PR interface (docs/010-Plugins.md §2) implemented. Each is a TODO pointing
-// at the relevant doc section, not faked.
+// docs/005-Agents.md - one static activity per agent role.
+// Planner, Developer and Git are REAL (docs/adr/ADR-0005 - Claude Code CLI subprocess,
+// plus real git/gh operations via GitOps). Deploy remains a stub: it needs the
+// PublishRecipe concept (docs/015-Deployment.md §2) implemented first - there's no
+// concrete answer yet for "how does Forge publish project X locally," so DeployAsync
+// doesn't pretend to have one.
 public static class AgentActivities
 {
     private static string ConnectionString =>
@@ -38,6 +37,11 @@ public static class AgentActivities
         [property: JsonPropertyName("needsClarification")] bool NeedsClarification,
         [property: JsonPropertyName("description")] string? Description,
         [property: JsonPropertyName("acceptanceCriteria")] List<string>? AcceptanceCriteria,
+        [property: JsonPropertyName("questions")] List<string>? Questions);
+
+    private record DeveloperLlmResponse(
+        [property: JsonPropertyName("needsClarification")] bool NeedsClarification,
+        [property: JsonPropertyName("summary")] string? Summary,
         [property: JsonPropertyName("questions")] List<string>? Questions);
 
     private static async Task RecordRunAsync(ForgeDbContext db, Guid taskId, AgentRole role, decimal costUsd, int promptTokens, int completionTokens, RunStatus status)
@@ -64,6 +68,32 @@ public static class AgentActivities
     // (docs/000-Vision.md UC-9) without needing the WebSocket channel
     // (docs/007-ExecutionEngine.md §4) built yet - the frontend just polls
     // GET /tasks/{id}/events.
+    // Tries the clean path first (strip fences, deserialize); falls back to extracting
+    // just the {...} substring if that fails - see ClaudeCliProvider.ExtractJsonObject
+    // for why (an occasional stray sentence before the JSON despite instructions).
+    private static T? TryParseLlmJson<T>(string rawText) where T : class
+    {
+        var stripped = ClaudeCliProvider.StripMarkdownFences(rawText);
+        try
+        {
+            return JsonSerializer.Deserialize<T>(stripped, LlmJsonOptions);
+        }
+        catch (JsonException)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<T>(ClaudeCliProvider.ExtractJsonObject(stripped), LlmJsonOptions);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+    }
+
+    private static string Truncate(string text, int maxLength) =>
+        text.Length <= maxLength ? text : text[..maxLength] + "…";
+
     private static async Task RecordEventAsync(ForgeDbContext db, Guid taskId, string type, AgentRole actorRole, object? payload = null)
     {
         db.Events.Add(new DomainEvent
@@ -128,17 +158,7 @@ public static class AgentActivities
             """;
 
         var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, localPath);
-
-        PlannerLlmResponse? parsed;
-        try
-        {
-            parsed = JsonSerializer.Deserialize<PlannerLlmResponse>(
-                ClaudeCliProvider.StripMarkdownFences(cliResult.Text), LlmJsonOptions);
-        }
-        catch (JsonException)
-        {
-            parsed = null;
-        }
+        var parsed = TryParseLlmJson<PlannerLlmResponse>(cliResult.Text);
 
         await RecordRunAsync(db, taskId, AgentRole.Planner, cliResult.CostUsd, cliResult.InputTokens, cliResult.OutputTokens,
             parsed is null ? RunStatus.Failed : RunStatus.Success);
@@ -146,7 +166,7 @@ public static class AgentActivities
         if (parsed is null)
         {
             await RecordEventAsync(db, taskId, "PlannerNeedsClarification", AgentRole.Planner,
-                new { reason = "unparseable model response" });
+                new { reason = "unparseable model response", rawResponse = Truncate(cliResult.Text, 1000) });
             return new PlannerResult(true, null, [], [
                 "The Planner's response could not be parsed as the expected JSON shape - treating as a clarification request rather than guessing at malformed output."
             ]);
@@ -181,17 +201,160 @@ public static class AgentActivities
             parsed.Questions ?? []);
     }
 
+    private static string WorktreesRootDir =>
+        Environment.GetEnvironmentVariable("FORGE_WORKTREES_DIR") ?? "/home/felippe/forge-worktrees";
+
     // docs/005-Agents.md §4. Real implementation: sync root branch, create/reuse
-    // worktree (docs/007-ExecutionEngine.md §2), run the agent loop, build/test.
+    // worktree (docs/007-ExecutionEngine.md §2), then run the same ClaudeCliProvider
+    // the Planner uses, but pointed at the worktree with bypassPermissions=true so it
+    // can actually edit files - see ClaudeCliProvider.InvokeAsync's doc comment for why
+    // that's acceptable only against the disposable sandbox project.
     [Activity]
     public static async Task<DeveloperResult> DevelopAsync(Guid taskId)
     {
         await using var db = OpenDb();
+        var task = await db.Tasks
+            .Include(t => t.Project)
+            .Include(t => t.AcceptanceCriteria)
+            .FirstOrDefaultAsync(t => t.Id == taskId);
+
+        if (task?.Project is null)
+        {
+            return new DeveloperResult(true, [
+                "Task or its Project could not be loaded from the database - an operational anomaly, not a real question."
+            ]);
+        }
+
         await RecordEventAsync(db, taskId, "DeveloperStarted", AgentRole.Developer);
-        // TODO: real worktree + coding loop - docs/005-Agents.md §4, docs/007-ExecutionEngine.md §2
+
+        var localPath = task.Project.LocalPath;
+        if (string.IsNullOrWhiteSpace(localPath) || !Directory.Exists(localPath))
+        {
+            await RecordEventAsync(db, taskId, "DeveloperNeedsClarification", AgentRole.Developer,
+                new { reason = "no usable Project.LocalPath" });
+            return new DeveloperResult(true, [
+                $"Project '{task.Project.Name}' has no usable LocalPath - the Developer needs a real checkout to branch from."
+            ]);
+        }
+
+        // docs/004-Workflow.md §3: resume against the SAME worktree if one already
+        // exists for this task, rather than recreating it.
+        var worktree = await db.Worktrees.FirstOrDefaultAsync(w => w.TaskId == taskId && w.DeletedAt == null);
+        string worktreePath;
+        string branchName;
+
+        if (worktree is not null && Directory.Exists(worktree.Path))
+        {
+            worktreePath = worktree.Path;
+            branchName = worktree.BranchName;
+            await RecordEventAsync(db, taskId, "DeveloperResumingWorktree", AgentRole.Developer, new { worktreePath });
+        }
+        else
+        {
+            branchName = $"forge/task-{taskId}-{GitOps.Slugify(task.Title)}";
+            worktreePath = Path.Combine(WorktreesRootDir, task.ProjectId.ToString(), $"task-{taskId}");
+            Directory.CreateDirectory(Path.GetDirectoryName(worktreePath)!);
+
+            await RecordEventAsync(db, taskId, "DeveloperSyncingRepo", AgentRole.Developer,
+                new { message = $"git fetch origin {task.Project.RootBranch}" });
+
+            var fetch = await GitOps.RunAsync(localPath, "fetch", "origin", task.Project.RootBranch);
+            if (!fetch.Success)
+                throw new InvalidOperationException($"git fetch failed: {fetch.Stderr}");
+
+            var addWorktree = await GitOps.RunAsync(localPath, "worktree", "add", worktreePath, "-b", branchName, $"origin/{task.Project.RootBranch}");
+            if (!addWorktree.Success)
+                throw new InvalidOperationException($"git worktree add failed: {addWorktree.Stderr}");
+
+            worktree = new Worktree
+            {
+                Id = Guid.NewGuid(),
+                TaskId = taskId,
+                ProjectId = task.ProjectId,
+                Path = worktreePath,
+                BranchName = branchName,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Worktrees.Add(worktree);
+            task.WorktreeId = worktree.Id;
+            task.BranchName = branchName;
+            await db.SaveChangesAsync();
+
+            await RecordEventAsync(db, taskId, "DeveloperWorktreeCreated", AgentRole.Developer,
+                new { worktreePath, branchName });
+        }
+
+        await RecordEventAsync(db, taskId, "DeveloperInvokingModel", AgentRole.Developer,
+            new { message = "Implementing the task..." });
+
+        var criteriaText = task.AcceptanceCriteria.Count > 0
+            ? string.Join("\n", task.AcceptanceCriteria.Select(c => $"- {c.Description}"))
+            : "(none recorded - use judgment based on the description)";
+
+        var prompt = $$"""
+            You are the Developer agent inside Forge. You are on a dedicated git branch
+            in a real checkout - it is safe to edit files here.
+
+            Title: {{task.Title}}
+            Description: {{task.Description}}
+            Acceptance Criteria:
+            {{criteriaText}}
+
+            Make the necessary code changes to satisfy the acceptance criteria. Keep
+            changes minimal and focused only on this task. Do not commit - Forge commits
+            on your behalf after you finish.
+
+            If you are missing information only a human can provide, make no changes and
+            list clarifying questions instead of guessing.
+
+            When done, respond with ONLY a single JSON object, no other text, no markdown
+            fences, matching exactly this shape:
+            {"needsClarification": boolean, "summary": string or null, "questions": string array}
+            """;
+
+        var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, worktreePath, bypassPermissions: true);
+        var parsed = TryParseLlmJson<DeveloperLlmResponse>(cliResult.Text);
+
+        await RecordRunAsync(db, taskId, AgentRole.Developer, cliResult.CostUsd, cliResult.InputTokens, cliResult.OutputTokens,
+            parsed is null ? RunStatus.Failed : RunStatus.Success);
+
+        if (parsed is null)
+        {
+            await RecordEventAsync(db, taskId, "DeveloperNeedsClarification", AgentRole.Developer,
+                new { reason = "unparseable model response", rawResponse = Truncate(cliResult.Text, 1000) });
+            return new DeveloperResult(true, [
+                "The Developer's response could not be parsed as the expected JSON shape - treating as a clarification request rather than guessing."
+            ]);
+        }
+
+        if (parsed.NeedsClarification)
+        {
+            await RecordEventAsync(db, taskId, "DeveloperNeedsClarification", AgentRole.Developer,
+                new { questions = parsed.Questions });
+            return new DeveloperResult(true, parsed.Questions ?? []);
+        }
+
+        // docs/005-Agents.md §4: the Developer commits locally for checkpointing; the
+        // Git agent owns push+PR later, at Done.
+        var status = await GitOps.RunAsync(worktreePath, "status", "--porcelain");
+        if (!string.IsNullOrWhiteSpace(status.Stdout))
+        {
+            await GitOps.RunAsync(worktreePath, "add", "-A");
+            var commitMessage = string.IsNullOrWhiteSpace(parsed.Summary) ? task.Title : parsed.Summary;
+            var commit = await GitOps.RunAsync(worktreePath, "commit", "-m", commitMessage);
+            await RecordEventAsync(db, taskId, "DeveloperCommitted", AgentRole.Developer,
+                new { message = commitMessage, success = commit.Success });
+        }
+        else
+        {
+            await RecordEventAsync(db, taskId, "DeveloperCommitted", AgentRole.Developer,
+                new { message = "no file changes to commit" });
+        }
+
         await RecordEventAsync(db, taskId, "DeveloperCompleted", AgentRole.Developer,
-            new { note = "stub - no real worktree/code changes made yet" });
-        return new DeveloperResult(NeedsClarification: false, Questions: []);
+            new { summary = parsed.Summary });
+
+        return new DeveloperResult(false, []);
     }
 
     // docs/005-Agents.md §5. Real implementation needs the PublishRecipe concept
@@ -208,13 +371,62 @@ public static class AgentActivities
     }
 
     // docs/005-Agents.md §6 - push + PR creation via the GitHub plugin (ADR-0002).
+    // Uses the `gh` CLI directly rather than GitHub's REST API - consistent with this
+    // whole pass's "subprocess over SDK" shape (ClaudeCliProvider, GitOps). Only
+    // implementation for GitHub per ADR-0002; Azure DevOps would need its own.
     [Activity]
     public static async Task GitFinalizeAsync(Guid taskId)
     {
         await using var db = OpenDb();
-        // TODO: real push + PR via gh/GitHub plugin - docs/005-Agents.md §6, docs/010-Plugins.md §2
+        var task = await db.Tasks.Include(t => t.Worktree).FirstOrDefaultAsync(t => t.Id == taskId);
+
+        if (task?.Worktree is null || task.BranchName is null)
+        {
+            await RecordEventAsync(db, taskId, "GitPushed", AgentRole.Git,
+                new { note = "no worktree/branch recorded for this task - nothing to push (Developer never committed real changes, e.g. the stub-era path or an empty diff)" });
+            return;
+        }
+
+        var worktreePath = task.Worktree.Path;
+        if (!Directory.Exists(worktreePath))
+        {
+            await RecordEventAsync(db, taskId, "GitPushed", AgentRole.Git,
+                new { note = $"worktree path {worktreePath} no longer exists - cannot push" });
+            return;
+        }
+
+        var push = await GitOps.RunAsync(worktreePath, "push", "-u", "origin", task.BranchName);
         await RecordEventAsync(db, taskId, "GitPushed", AgentRole.Git,
-            new { note = "stub - no real git push/PR performed yet" });
+            new { branch = task.BranchName, success = push.Success, stderr = push.Success ? null : push.Stderr });
+
+        if (push.Success)
+        {
+            var pr = await GitOps.RunGhAsync(worktreePath,
+                "pr", "create", "--fill", "--head", task.BranchName);
+            await RecordEventAsync(db, taskId, "PRCreated", AgentRole.Git,
+                new { success = pr.Success, output = pr.Success ? pr.Stdout.Trim() : pr.Stderr.Trim() });
+        }
+
+        // docs/007-ExecutionEngine.md §2 - cleanup only after push(+PR); `git worktree
+        // remove` must run from the canonical clone, not the worktree being removed.
+        // A FORCED removal (uncommitted changes present) is deliberately NOT something
+        // an agent does unattended - that's in the project's permission "ask" list.
+        var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == task.ProjectId);
+        if (project?.LocalPath is { } localPath && Directory.Exists(localPath))
+        {
+            var remove = await GitOps.RunAsync(localPath, "worktree", "remove", worktreePath);
+            if (remove.Success)
+            {
+                task.Worktree.DeletedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync();
+                await RecordEventAsync(db, taskId, "WorktreeDeleted", AgentRole.Git, new { worktreePath });
+            }
+            else
+            {
+                await RecordEventAsync(db, taskId, "WorktreeDeleted", AgentRole.Git,
+                    new { success = false, stderr = remove.Stderr });
+            }
+        }
     }
 
     // docs/005-Agents.md §3. Per-project ordering - not implemented as real logic yet;
