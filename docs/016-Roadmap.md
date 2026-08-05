@@ -11,11 +11,11 @@ Draft — updated as of the overnight autonomous build session, 2026-08-05
 - [x] Kanban board (read + the 4 human-gated actions) — [[013-Frontend]]
 - [x] Task state machine as a real Temporal workflow — `TaskWorkflow` in `backend/src/Forge.Workflows`, exercised end-to-end against local Postgres+Temporal
 - [x] REST API first slice (projects, tasks, answers/move/promote) — [[012-API]]
-- [ ] **Planner agent — real implementation.** Currently a stub that always succeeds with a placeholder description ([[005-Agents]] §2). Needs: Claude Agent SDK wiring through the Model Router ([[008-ModelRouter]]), repository read access, web/issue-tracker MCP tools ([[009-MCP]]).
-- [ ] **Developer agent — real implementation.** Currently a stub. Needs: worktree sync/create/reuse ([[007-ExecutionEngine]] §2), the actual agent loop, build/test execution, live trace streaming.
-- [ ] **Deploy agent — real implementation.** Needs the `PublishRecipe` concept ([[005-Agents]] §5, [[015-Deployment]]) designed first — currently no concrete answer for "how does Forge know how to publish project X locally."
+- [x] `BacklogSchedulerWorkflow` — one per project, polling every 5s, promotes the top-priority Backlog task when a worker slot is free. Validated live: a task moved Backlog->Todo->Executing->AwaitingPublish with zero manual intervention. Known simplification: fixed-interval polling instead of event-driven wakeup, no `ContinueAsNewAsync` yet ([[006-Scheduler]] §1).
+- [ ] **Planner agent — real implementation.** Currently a stub that always succeeds with a placeholder description ([[005-Agents]] §2). Needs: Claude Agent SDK wiring through the Model Router ([[008-ModelRouter]]), repository read access, web/issue-tracker MCP tools ([[009-MCP]]). **Blocked on a real prerequisite**: Forge's own backend needs Anthropic API credentials configured for it to call — distinct from any session credential used to build Forge itself.
+- [ ] **Developer agent — real implementation.** Currently a stub. Needs: worktree sync/create/reuse ([[007-ExecutionEngine]] §2), the actual agent loop, build/test execution, live trace streaming. Same credential prerequisite as the Planner agent.
+- [ ] **Deploy agent — real implementation.** [[015-Deployment]] §2 now proposes a concrete `PublishRecipe` shape — next step is adding the schema and wiring `DeployAsync` to execute it.
 - [ ] **Git agent — real implementation.** Currently a no-op stub; needs real GitHub push/PR calls through the plugin interface ([[010-Plugins]] §2).
-- [ ] `BacklogSchedulerWorkflow` — doesn't exist; a manual `/promote` endpoint stands in ([[006-Scheduler]] §1).
 - [ ] WebSocket live trace ([[007-ExecutionEngine]] §4) — 2-second polling stands in ([[013-Frontend]] §3).
 - [ ] Basic AuthN so the API isn't fully open ([[014-Security]] §1) — not urgent while single-user/single-machine, becomes a hard blocker before any second user or the real dedicated server ([[ADR-0004]]) is reachable by anyone else.
 
