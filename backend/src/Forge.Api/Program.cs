@@ -9,8 +9,20 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Enums (TaskState, AgentRole, ...) serialize as their names ("Inbox"), not integer
 // indices - so the frontend contract matches docs/003-Domain.md directly.
+//
+// ReferenceHandler.IgnoreCycles: entities have bidirectional nav properties
+// (TaskItem.AcceptanceCriteria <-> AcceptanceCriterion.Task, etc.) - EF Core's change
+// tracker fixes these up automatically once loaded in the same DbContext, and without
+// this, System.Text.Json throws on the cycle the moment a real AcceptanceCriterion
+// exists (found live: the Planner's first real run created one and GET /tasks/{id}
+// started 500-ing). A known simplification, not the final shape - proper response
+// DTOs (docs/012-API.md) would avoid serializing entity graphs directly and are the
+// better long-term fix.
 builder.Services.ConfigureHttpJsonOptions(options =>
-    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+{
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    options.SerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+});
 
 // Local dev only: lets the Vite dev server (localhost:5173) call this API directly
 // when not going through the /api proxy. Tightened before any real deployment
@@ -110,11 +122,30 @@ app.MapGet("/tasks/{id:guid}", async (ForgeDbContext db, Guid id) =>
     await db.Tasks
         .Include(t => t.SubTasks)
         .Include(t => t.AcceptanceCriteria)
+        .Include(t => t.Runs)
         .AsNoTracking()
         .FirstOrDefaultAsync(t => t.Id == id)
         is { } task
         ? Results.Ok(task)
         : Results.NotFound());
+
+app.MapGet("/tasks/{id:guid}/runs", async (ForgeDbContext db, Guid id) =>
+    await db.Runs.AsNoTracking().Where(r => r.TaskId == id).OrderBy(r => r.StartedAt).ToListAsync());
+
+app.MapGet("/tasks/{id:guid}/events", async (ForgeDbContext db, Guid id) =>
+    await db.Events.AsNoTracking().Where(e => e.TaskId == id).OrderBy(e => e.OccurredAt).ToListAsync());
+
+app.MapGet("/tasks/{id:guid}/cost", async (ForgeDbContext db, Guid id) =>
+{
+    var runs = await db.Runs.AsNoTracking().Where(r => r.TaskId == id).ToListAsync();
+    return Results.Ok(new
+    {
+        TotalCostUsd = runs.Sum(r => r.CostEstimate),
+        TotalPromptTokens = runs.Sum(r => r.PromptTokens),
+        TotalCompletionTokens = runs.Sum(r => r.CompletionTokens),
+        RunCount = runs.Count,
+    });
+});
 
 app.MapPost("/tasks/{id:guid}/answers", async (ForgeDbContext db, TemporalClient temporal, Guid id, AnswerQuestionsRequest request) =>
 {
