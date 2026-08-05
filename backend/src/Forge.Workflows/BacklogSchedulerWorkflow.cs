@@ -27,11 +27,6 @@ public class BacklogSchedulerWorkflow
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
-    // docs/006-Scheduler.md §5 open question: this should become a per-project,
-    // frontend-configurable setting. Hardcoded here because nothing consumes a
-    // configurable version of it yet.
-    private const int MaxConcurrentExecutingPerProject = 2;
-
     private static readonly ActivityOptions SnapshotActivityOptions = new()
     {
         StartToCloseTimeout = TimeSpan.FromSeconds(30),
@@ -81,7 +76,7 @@ public class BacklogSchedulerWorkflow
             }
 
             if (snapshot.TopBacklogTaskId is { } taskId &&
-                snapshot.ExecutingCount < MaxConcurrentExecutingPerProject)
+                snapshot.ExecutingCount < SchedulingActivities.MaxConcurrentExecutingPerProject)
             {
                 var handle = Workflow.GetExternalWorkflowHandle<TaskWorkflow>($"task-{taskId}");
                 await handle.SignalAsync(wf => wf.PromoteToTodoAsync());

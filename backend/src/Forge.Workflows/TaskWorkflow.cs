@@ -23,6 +23,11 @@ public class TaskWorkflow
     // shrink it - the value itself was never meant to be tunable per-task.
     private static readonly TimeSpan ProductionPollInterval = TimeSpan.FromSeconds(60);
 
+    // docs/006-Scheduler.md §1 - how often to recheck project capacity while parked in
+    // Todo waiting for an Executing slot. Mirrors ProductionPollInterval's pattern
+    // (field, not a literal, so a test can shrink it).
+    private static readonly TimeSpan TodoCapacityPollInterval = TimeSpan.FromSeconds(5);
+
     [WorkflowQuery]
     public TaskState State => _state;
 
@@ -53,6 +58,18 @@ public class TaskWorkflow
     };
 
     private static readonly ActivityOptions PersistActivityOptions = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromSeconds(30),
+        RetryPolicy = new RetryPolicy
+        {
+            InitialInterval = TimeSpan.FromSeconds(2),
+            BackoffCoefficient = 2.0f,
+            MaximumInterval = TimeSpan.FromSeconds(30),
+            MaximumAttempts = 5,
+        },
+    };
+
+    private static readonly ActivityOptions CapacityActivityOptions = new()
     {
         StartToCloseTimeout = TimeSpan.FromSeconds(30),
         RetryPolicy = new RetryPolicy
@@ -108,6 +125,20 @@ public class TaskWorkflow
             await Workflow.WaitConditionAsync(() => _promoted);
             _promoted = false;
             await SetStateAsync(taskId, TaskState.Todo);
+
+            // BacklogSchedulerWorkflow's MaxConcurrentExecutingPerProject check ran
+            // against a Postgres snapshot taken before it signaled PromoteToTodoAsync -
+            // by the time we get here, another task from the same project may have
+            // already taken the slot that promotion was counting on. Recheck capacity
+            // for real, right at the Todo->Executing boundary, and stay parked in Todo
+            // (visibly, via SetStateAsync/PersistTaskStateAsync above) until a slot is
+            // actually free instead of trusting that stale snapshot.
+            while (!await Workflow.ExecuteActivityAsync(
+                () => SchedulingActivities.HasExecutingCapacityAsync(taskId),
+                CapacityActivityOptions))
+            {
+                await Workflow.DelayAsync(TodoCapacityPollInterval);
+            }
 
             await SetStateAsync(taskId, TaskState.Executing);
             var dev = await Workflow.ExecuteActivityAsync(
