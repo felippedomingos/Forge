@@ -58,6 +58,26 @@ public static class AgentActivities
         await db.SaveChangesAsync();
     }
 
+    // docs/003-Domain.md §4's event catalog, finally written to for real - previously
+    // only UserAnsweredQuestions (from Forge.Api) ever hit the `events` table. This is
+    // what lets the task detail view show "what the agent is doing right now"
+    // (docs/000-Vision.md UC-9) without needing the WebSocket channel
+    // (docs/007-ExecutionEngine.md §4) built yet - the frontend just polls
+    // GET /tasks/{id}/events.
+    private static async Task RecordEventAsync(ForgeDbContext db, Guid taskId, string type, AgentRole actorRole, object? payload = null)
+    {
+        db.Events.Add(new DomainEvent
+        {
+            Id = Guid.NewGuid(),
+            TaskId = taskId,
+            Type = type,
+            Payload = payload is null ? "{}" : JsonSerializer.Serialize(payload),
+            OccurredAt = DateTimeOffset.UtcNow,
+            Actor = $"agent:{actorRole}",
+        });
+        await db.SaveChangesAsync();
+    }
+
     // docs/005-Agents.md §2. Real implementation: shells out to the Claude Code CLI
     // (ClaudeCliProvider) against the project's LocalPath checkout, asks it to produce
     // a description + acceptance criteria or flag genuine ambiguity, and persists
@@ -75,13 +95,20 @@ public static class AgentActivities
             ]);
         }
 
+        await RecordEventAsync(db, taskId, "PlannerStarted", AgentRole.Planner);
+
         var localPath = task.Project.LocalPath;
         if (string.IsNullOrWhiteSpace(localPath) || !Directory.Exists(localPath))
         {
+            await RecordEventAsync(db, taskId, "PlannerNeedsClarification", AgentRole.Planner,
+                new { reason = "no usable Project.LocalPath" });
             return new PlannerResult(true, null, [], [
                 $"Project '{task.Project.Name}' has no usable LocalPath configured on this machine - the Planner needs a real checkout to read for context (docs/003-Domain.md's Project.LocalPath)."
             ]);
         }
+
+        await RecordEventAsync(db, taskId, "PlannerInvokingModel", AgentRole.Planner,
+            new { message = $"Reading {localPath} and analyzing \"{task.Title}\"..." });
 
         var prompt = $$"""
             You are the Planner agent inside Forge, an AI-native software factory.
@@ -118,6 +145,8 @@ public static class AgentActivities
 
         if (parsed is null)
         {
+            await RecordEventAsync(db, taskId, "PlannerNeedsClarification", AgentRole.Planner,
+                new { reason = "unparseable model response" });
             return new PlannerResult(true, null, [], [
                 "The Planner's response could not be parsed as the expected JSON shape - treating as a clarification request rather than guessing at malformed output."
             ]);
@@ -136,6 +165,13 @@ public static class AgentActivities
                 });
             }
             await db.SaveChangesAsync();
+            await RecordEventAsync(db, taskId, "PlannerCompleted", AgentRole.Planner,
+                new { description = parsed.Description, acceptanceCriteriaCount = parsed.AcceptanceCriteria?.Count ?? 0 });
+        }
+        else
+        {
+            await RecordEventAsync(db, taskId, "PlannerNeedsClarification", AgentRole.Planner,
+                new { questions = parsed.Questions });
         }
 
         return new PlannerResult(
@@ -148,18 +184,38 @@ public static class AgentActivities
     // docs/005-Agents.md §4. Real implementation: sync root branch, create/reuse
     // worktree (docs/007-ExecutionEngine.md §2), run the agent loop, build/test.
     [Activity]
-    public static Task<DeveloperResult> DevelopAsync(Guid taskId) =>
-        Task.FromResult(new DeveloperResult(NeedsClarification: false, Questions: []));
+    public static async Task<DeveloperResult> DevelopAsync(Guid taskId)
+    {
+        await using var db = OpenDb();
+        await RecordEventAsync(db, taskId, "DeveloperStarted", AgentRole.Developer);
+        // TODO: real worktree + coding loop - docs/005-Agents.md §4, docs/007-ExecutionEngine.md §2
+        await RecordEventAsync(db, taskId, "DeveloperCompleted", AgentRole.Developer,
+            new { note = "stub - no real worktree/code changes made yet" });
+        return new DeveloperResult(NeedsClarification: false, Questions: []);
+    }
 
     // docs/005-Agents.md §5. Real implementation needs the PublishRecipe concept
     // (docs/015-Deployment.md §2) implemented - schema exists as a proposal, not yet built.
     [Activity]
-    public static Task<DeployResult> DeployAsync(Guid taskId) =>
-        Task.FromResult(new DeployResult(Success: true, Error: null));
+    public static async Task<DeployResult> DeployAsync(Guid taskId)
+    {
+        await using var db = OpenDb();
+        await RecordEventAsync(db, taskId, "DeployStarted", AgentRole.Deploy);
+        // TODO: real PublishRecipe execution - docs/015-Deployment.md §2/§3
+        await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy,
+            new { note = "stub - no real publish steps executed yet" });
+        return new DeployResult(Success: true, Error: null);
+    }
 
     // docs/005-Agents.md §6 - push + PR creation via the GitHub plugin (ADR-0002).
     [Activity]
-    public static Task GitFinalizeAsync(Guid taskId) => Task.CompletedTask;
+    public static async Task GitFinalizeAsync(Guid taskId)
+    {
+        await using var db = OpenDb();
+        // TODO: real push + PR via gh/GitHub plugin - docs/005-Agents.md §6, docs/010-Plugins.md §2
+        await RecordEventAsync(db, taskId, "GitPushed", AgentRole.Git,
+            new { note = "stub - no real git push/PR performed yet" });
+    }
 
     // docs/005-Agents.md §3. Per-project ordering - not implemented as real logic yet;
     // returning 0 rather than throwing keeps the workflow shape testable.

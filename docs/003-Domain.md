@@ -65,7 +65,9 @@ The happy path above is fully determined by the founder's original spec. What's 
 
 Each row is an `Event.type` value. This list will grow; it is not meant to be exhaustive on first pass.
 
-`TaskCreated`, `PlannerStarted`, `PlannerCompleted`, `PlannerNeedsClarification`, `UserAnsweredQuestions`, `PrioritizationCompleted`, `TaskPromotedToTodo`, `WorkerAllocated`, `DeveloperStarted`, `DeveloperCompleted`, `DeveloperFailed`, `UserRequestedPublish`, `DeployStarted`, `DeployCompleted`, `DeployFailed`, `UserApprovedReview`, `GitCommitted`, `GitPushed`, `PRCreated`, `WorktreeDeleted`, `PipelineConfirmedDeployment`.
+`TaskCreated`, `PlannerStarted`, `PlannerInvokingModel`, `PlannerCompleted`, `PlannerNeedsClarification`, `UserAnsweredQuestions`, `PrioritizationCompleted`, `TaskPromotedToTodo`, `WorkerAllocated`, `DeveloperStarted`, `DeveloperCompleted`, `DeveloperFailed`, `UserRequestedPublish`, `DeployStarted`, `DeployCompleted`, `DeployFailed`, `UserApprovedReview`, `GitCommitted`, `GitPushed`, `PRCreated`, `WorktreeDeleted`, `PipelineConfirmedDeployment`.
+
+`PlannerInvokingModel` was added once the Planner agent became real ([[ADR-0005]]) - it's the one event type that exists purely to give the task detail view ([[013-Frontend]]) something to show while a real LLM call is in flight, rather than a silent gap between `PlannerStarted` and `PlannerCompleted`.
 
 `TaskMoved` is kept as a generic umbrella type for any card move captured by the UI that doesn't yet map to one of the named events above (e.g. a manual correction) — every legitimate transition should eventually be one of the named events, not this umbrella, per INV-3.
 

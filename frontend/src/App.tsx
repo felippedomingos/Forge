@@ -7,7 +7,7 @@ import { api, TASK_STATES, type TaskItem, type TaskState } from './lib/api'
 // (promote - stand-in for the missing BacklogSchedulerWorkflow, docs/006-Scheduler.md
 // §1), AwaitingPublish (publish), Review (approve). Every other state only advances
 // on its own via the workflow's own agent activities.
-function TaskCard({ task }: { task: TaskItem }) {
+function TaskCard({ task, onOpen }: { task: TaskItem; onOpen: (id: string) => void }) {
   const queryClient = useQueryClient()
   const [answerText, setAnswerText] = useState('')
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['tasks'] })
@@ -23,12 +23,19 @@ function TaskCard({ task }: { task: TaskItem }) {
     },
   })
 
+  // Stop the click from also opening the detail panel when interacting with a
+  // control inside the card - only clicking the card body itself opens it.
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation()
+
   return (
-    <div className="rounded border border-neutral-200 bg-white p-3 text-sm shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+    <div
+      className="cursor-pointer rounded border border-neutral-200 bg-white p-3 text-sm shadow-sm hover:border-neutral-400 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600"
+      onClick={() => onOpen(task.id)}
+    >
       <p className="mb-2">{task.title}</p>
 
       {task.state === 'Blocked' && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1" onClick={stop}>
           <input
             className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800"
             placeholder="Answer the Planner's question…"
@@ -49,7 +56,10 @@ function TaskCard({ task }: { task: TaskItem }) {
         <button
           className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700"
           disabled={promote.isPending}
-          onClick={() => promote.mutate()}
+          onClick={(e) => {
+            stop(e)
+            promote.mutate()
+          }}
         >
           Promote to Todo →
         </button>
@@ -59,7 +69,10 @@ function TaskCard({ task }: { task: TaskItem }) {
         <button
           className="rounded bg-emerald-600 px-2 py-1 text-xs text-white disabled:opacity-40"
           disabled={publish.isPending}
-          onClick={() => publish.mutate()}
+          onClick={(e) => {
+            stop(e)
+            publish.mutate()
+          }}
         >
           Publish →
         </button>
@@ -69,11 +82,113 @@ function TaskCard({ task }: { task: TaskItem }) {
         <button
           className="rounded bg-emerald-600 px-2 py-1 text-xs text-white disabled:opacity-40"
           disabled={approve.isPending}
-          onClick={() => approve.mutate()}
+          onClick={(e) => {
+            stop(e)
+            approve.mutate()
+          }}
         >
           Approve → Done
         </button>
       )}
+    </div>
+  )
+}
+
+// docs/000-Vision.md UC-9: click a task, see what it does and what the agent is doing
+// right now if it's in progress. Polls the task + its event timeline every 2s while
+// open - a stand-in for the WebSocket channel docs/007-ExecutionEngine.md §4 describes
+// as the target, same pattern as the board's own polling.
+function TaskDetailPanel({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+  const taskQuery = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => api.getTask(taskId),
+    refetchInterval: 2000,
+  })
+  const eventsQuery = useQuery({
+    queryKey: ['task-events', taskId],
+    queryFn: () => api.getTaskEvents(taskId),
+    refetchInterval: 2000,
+  })
+
+  const task = taskQuery.data
+  const events = eventsQuery.data ?? []
+  const inProgress = task && !['Blocked', 'AwaitingPublish', 'Review', 'Done', 'Production'].includes(task.state)
+
+  return (
+    <div className="fixed inset-0 z-10 flex justify-end bg-black/20" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-md overflow-y-auto bg-white p-6 shadow-xl dark:bg-neutral-900"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button className="mb-4 text-sm text-neutral-500" onClick={onClose}>
+          ← Close
+        </button>
+
+        {!task && <p className="text-sm text-neutral-500">Loading…</p>}
+
+        {task && (
+          <>
+            <h2 className="text-lg font-semibold">{task.title}</h2>
+            <p className="mt-1 text-sm text-neutral-500">
+              {task.state}
+              {inProgress && ' · agent working…'}
+            </p>
+
+            {task.description && (
+              <p className="mt-4 text-sm">{task.description}</p>
+            )}
+
+            {(task.acceptanceCriteria?.length ?? 0) > 0 && (
+              <div className="mt-4">
+                <h3 className="mb-2 text-xs font-medium uppercase text-neutral-500">
+                  Acceptance Criteria
+                </h3>
+                <ul className="flex flex-col gap-1 text-sm">
+                  {task.acceptanceCriteria!.map((c) => (
+                    <li key={c.id} className="flex gap-2">
+                      <span>{c.satisfied ? '✓' : '○'}</span>
+                      <span>{c.description}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="mt-4">
+              <h3 className="mb-2 text-xs font-medium uppercase text-neutral-500">
+                Timeline
+              </h3>
+              <ul className="flex flex-col gap-2 text-xs">
+                {events.map((e) => (
+                  <li key={e.id} className="border-l-2 border-neutral-200 pl-2 dark:border-neutral-700">
+                    <div className="text-neutral-400">
+                      {new Date(e.occurredAt).toLocaleTimeString()} · {e.actor}
+                    </div>
+                    <div>{e.type}</div>
+                  </li>
+                ))}
+                {events.length === 0 && <li className="text-neutral-400">No events yet.</li>}
+              </ul>
+            </div>
+
+            {(task.runs?.length ?? 0) > 0 && (
+              <div className="mt-4">
+                <h3 className="mb-2 text-xs font-medium uppercase text-neutral-500">
+                  Agent Runs (cost)
+                </h3>
+                <ul className="flex flex-col gap-1 text-xs">
+                  {task.runs!.map((r) => (
+                    <li key={r.id}>
+                      {r.agentRole} · {r.status} · ${r.costEstimate.toFixed(4)} ·{' '}
+                      {r.promptTokens + r.completionTokens} tokens
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -84,6 +199,7 @@ function Board() {
   const queryClient = useQueryClient()
   const [newTitle, setNewTitle] = useState('')
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null)
 
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: api.listProjects })
   // 2s polling stands in for the real WebSocket trace (docs/007-ExecutionEngine.md §4)
@@ -161,12 +277,14 @@ function Board() {
             </h2>
             <div className="flex flex-col gap-2">
               {tasksByState(state).map((task) => (
-                <TaskCard key={task.id} task={task} />
+                <TaskCard key={task.id} task={task} onOpen={setOpenTaskId} />
               ))}
             </div>
           </div>
         ))}
       </div>
+
+      {openTaskId && <TaskDetailPanel taskId={openTaskId} onClose={() => setOpenTaskId(null)} />}
     </div>
   )
 }

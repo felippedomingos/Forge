@@ -23,6 +23,31 @@ export interface Project {
   createdAt: string
 }
 
+export interface AcceptanceCriterion {
+  id: string
+  description: string
+  satisfied: boolean
+}
+
+export interface TaskEvent {
+  id: string
+  type: string
+  payload: string
+  occurredAt: string
+  actor: string
+}
+
+export interface Run {
+  id: string
+  agentRole: string
+  modelProvider: string
+  status: string
+  promptTokens: number
+  completionTokens: number
+  costEstimate: number
+  startedAt: string
+}
+
 export interface TaskItem {
   id: string
   projectId: string
@@ -34,6 +59,8 @@ export interface TaskItem {
   worktreeId: string | null
   createdAt: string
   updatedAt: string
+  acceptanceCriteria?: AcceptanceCriterion[]
+  runs?: Run[]
 }
 
 const BASE_URL = '/api'
@@ -74,4 +101,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ answers }),
     }),
+  getTask: (taskId: string) => request<TaskItem>(`/tasks/${taskId}`),
+  // docs/000-Vision.md UC-9 - the task detail view's event timeline. Polling stands in
+  // for the WebSocket channel docs/007-ExecutionEngine.md §4 still describes as the
+  // target mechanism.
+  getTaskEvents: (taskId: string) => request<TaskEvent[]>(`/tasks/${taskId}/events`),
 }
