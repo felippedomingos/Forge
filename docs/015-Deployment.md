@@ -21,13 +21,15 @@ PublishRecipe {
 }
 ```
 
-Stored as a JSONB column on `Project` (or a dedicated `publish_recipes` table if it grows more structure than this) — not modeled as a [[010-Plugins]] `Plugin`, because it isn't a swappable *provider* the way a Git provider or deployment target is; it's per-project operational configuration, closer to `Plugin.configuration` in spirit than to a `Plugin` itself. Concrete schema addition deferred to whenever the real Deploy agent implementation begins ([[016-Roadmap]] MVP item), not added to [[011-Database]]'s migration yet since nothing consumes it today.
+**Implemented** (not just proposed): stored as a JSONB column, `Project.PublishRecipe`, matching `Plugin.Configuration`'s pattern rather than an EF owned type — schema can grow without a migration each time. Only `migrationCommand` is actually executed by `AgentActivities.DeployAsync`; `restartTargets` and `healthCheckUrl` are accepted by the shape but not exercised — no test project has a real running service to restart or poll yet, and implementing that logic against nothing to verify it against would be guessing at a shape, not building one.
 
 **Idempotency is the recipe author's responsibility, not something Forge enforces.** [[006-Scheduler]] §3 already caps Deploy activity retries at 2 attempts specifically because a partially-applied deploy shouldn't be retried blindly — but if a project's `MigrationCommand` isn't itself safe to run twice, that's a property of how that project's migrations are written, not something the Deploy agent can guarantee generically.
 
+**Cleanliness is also the recipe author's responsibility — found live, not theorized.** A `migrationCommand` of `python3 -m py_compile calculator.py` left a `__pycache__/` directory behind in the worktree. That's an untracked file, so the Git agent's worktree removal ([[005-Agents]] §6) correctly *refused* to delete it afterward (`git worktree remove` without `--force`) rather than silently discarding it — exactly the safety behavior [[007-ExecutionEngine]] §2 and the project's `.claude/settings.json` "ask" list intend. The task still completed successfully (PR opened); only the worktree directory was left for manual cleanup. A recipe that produces artifacts should clean up after itself (or the project's `.gitignore` should exclude them) — Forge won't force-delete on a recipe author's behalf.
+
 ## 3. Deploy Agent's Publish Protocol
 
-Once a `PublishRecipe` exists for a project: run `MigrationCommand` (if set) → restart `RestartTargets` in order → poll `HealthCheckUrl` (if set) until it responds or a timeout elapses → `DeployCompleted`. Any step failing at any point → `DeployFailed`, which per [[004-Workflow]] §5 bounces the task back to `AwaitingPublish` rather than auto-retrying further steps.
+`migrationCommand` (if set) runs inside the **task's Worktree** (the branch under review — not the canonical clone, since that's where the actual change under test lives), via `/bin/bash -c`. Success → `DeployCompleted` with captured stdout. Failure → `DeployFailed` with captured stderr, which per [[004-Workflow]] §5 bounces the task back to `AwaitingPublish` rather than auto-retrying — **validated live**: a recipe accidentally mismatched to a different task's branch failed with a real Python traceback, correctly stayed at `AwaitingPublish`, and a corrected recipe then succeeded on retry. `restartTargets`/`healthCheckUrl` are not implemented (see above).
 
 ## 4. CI/CD Integration for Production Confirmation
 
@@ -37,3 +39,5 @@ Once a `PublishRecipe` exists for a project: run `MigrationCommand` (if set) →
 
 - Exact storage shape for `PublishRecipe` (§2) once a second real project needs one — the JSONB-on-Project proposal above is a reasonable default, not a decision that's been stress-tested against a second use case.
 - The CI/CD webhook mechanism (§4) is undesigned; revisit once Forge's own repository has a real pipeline to integrate against.
+- No API endpoint exists yet to configure a `PublishRecipe` — it was set directly via SQL for this validation. `POST /projects` ([[012-API]]) should probably accept it, or a dedicated `PATCH /projects/{id}/publish-recipe`.
+- A worktree left behind after a refused (dirty) removal has no automatic detection/alerting — a human currently has to notice and clean it up manually, as happened during this validation.

@@ -27,6 +27,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
         {
             e.ToTable("projects");
             e.HasKey(p => p.Id);
+            e.Property(p => p.PublishRecipe).HasColumnType("jsonb");
         });
 
         modelBuilder.Entity<TaskItem>(e =>

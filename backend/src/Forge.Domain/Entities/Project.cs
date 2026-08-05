@@ -14,6 +14,13 @@ public class Project
     // Nullable for now since it's set manually per-project until project onboarding
     // automates cloning - see docs/011-Database.md open items.
     public string? LocalPath { get; set; }
+    // docs/015-Deployment.md §2 - the PublishRecipe proposal, stored as raw JSON (same
+    // pattern as Plugin.Configuration) rather than an EF owned type, so the schema can
+    // grow without a migration every time. Nullable: most projects won't have one yet.
+    // Only "migrationCommand" is actually executed by DeployAsync today -
+    // "restartTargets"/"healthCheckUrl" are accepted by the shape but not exercised,
+    // since no test project has a real running service to restart/poll.
+    public string? PublishRecipe { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
     public Plugin? GitProviderPlugin { get; set; }

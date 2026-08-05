@@ -357,17 +357,91 @@ public static class AgentActivities
         return new DeveloperResult(false, []);
     }
 
-    // docs/005-Agents.md §5. Real implementation needs the PublishRecipe concept
-    // (docs/015-Deployment.md §2) implemented - schema exists as a proposal, not yet built.
+    private record PublishRecipeDto(
+        [property: JsonPropertyName("migrationCommand")] string? MigrationCommand,
+        [property: JsonPropertyName("restartTargets")] List<string>? RestartTargets,
+        [property: JsonPropertyName("healthCheckUrl")] string? HealthCheckUrl);
+
+    // docs/005-Agents.md §5, docs/015-Deployment.md §2/§3. Real implementation, but
+    // deliberately partial: only `migrationCommand` is executed. `restartTargets` and
+    // `healthCheckUrl` are accepted by the schema but not exercised - no test project
+    // has a real running service to restart or poll yet, and building that logic
+    // against nothing to verify it against would be guessing at a shape rather than
+    // implementing one. Runs inside the task's Worktree (the branch under review), not
+    // the canonical clone, since that's where the actual change under test lives.
     [Activity]
     public static async Task<DeployResult> DeployAsync(Guid taskId)
     {
         await using var db = OpenDb();
+        var task = await db.Tasks
+            .Include(t => t.Project)
+            .Include(t => t.Worktree)
+            .FirstOrDefaultAsync(t => t.Id == taskId);
+
+        if (task?.Project is null)
+            return new DeployResult(false, "Task or its Project could not be loaded.");
+
         await RecordEventAsync(db, taskId, "DeployStarted", AgentRole.Deploy);
-        // TODO: real PublishRecipe execution - docs/015-Deployment.md §2/§3
-        await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy,
-            new { note = "stub - no real publish steps executed yet" });
-        return new DeployResult(Success: true, Error: null);
+
+        var recipeJson = task.Project.PublishRecipe;
+        if (string.IsNullOrWhiteSpace(recipeJson))
+        {
+            await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy,
+                new { note = $"Project '{task.Project.Name}' has no PublishRecipe configured - nothing to do." });
+            return new DeployResult(true, null);
+        }
+
+        PublishRecipeDto? recipe;
+        try
+        {
+            recipe = JsonSerializer.Deserialize<PublishRecipeDto>(recipeJson, LlmJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy,
+                new { note = $"PublishRecipe is not valid JSON: {ex.Message}" });
+            return new DeployResult(false, "Invalid PublishRecipe JSON.");
+        }
+
+        if (string.IsNullOrWhiteSpace(recipe?.MigrationCommand))
+        {
+            await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy,
+                new { note = "PublishRecipe has no migrationCommand - nothing to run." });
+            return new DeployResult(true, null);
+        }
+
+        var runDirectory = task.Worktree is { DeletedAt: null } wt && Directory.Exists(wt.Path)
+            ? wt.Path
+            : task.Project.LocalPath;
+
+        if (string.IsNullOrWhiteSpace(runDirectory) || !Directory.Exists(runDirectory))
+        {
+            await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy,
+                new { note = "No worktree or LocalPath available to run the publish command against." });
+            return new DeployResult(false, "No directory to run the PublishRecipe against.");
+        }
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "/bin/bash",
+            WorkingDirectory = runDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(recipe.MigrationCommand);
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var stdout = await process.StandardOutput.ReadToEndAsync();
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        var success = process.ExitCode == 0;
+        await RecordEventAsync(db, taskId, success ? "DeployCompleted" : "DeployFailed", AgentRole.Deploy,
+            new { command = recipe.MigrationCommand, output = Truncate(success ? stdout : stderr, 1000) });
+
+        return new DeployResult(success, success ? null : Truncate(stderr, 500));
     }
 
     // docs/005-Agents.md §6 - push + PR creation via the GitHub plugin (ADR-0002).
