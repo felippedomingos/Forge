@@ -36,5 +36,10 @@ public static class PersistenceActivities
         task.State = state;
         task.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
+
+        // docs/007-ExecutionEngine.md §4 - same NOTIFY channel AgentActivities uses,
+        // so a state transition wakes the frontend's WebSocket subscribers just like
+        // an event does.
+        await PostgresNotify.TaskChangedAsync(db, taskId);
     }
 }

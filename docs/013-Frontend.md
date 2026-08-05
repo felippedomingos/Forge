@@ -24,15 +24,16 @@ Chosen via direct founder Q&A, not assumed:
 - **Board**: all 10 states from [[003-Domain]] §3, laid out as an even CSS grid (`grid-cols-10`) so **all columns fit the viewport with no horizontal scroll** — founder feedback against the earlier flex-scroll layout. Each column scrolls vertically on its own (thin themed scrollbar, `.board-scroll` utility in `index.css`) if its card list grows past the column height.
 - **Drag-and-drop** (founder-requested): cards are draggable only from the 3 states with a real human-gated forward transition (`Backlog`, `AwaitingPublish`, `Review` — matching [[003-Domain]] §3 exactly); dropping is only accepted on that task's one valid target column (`Todo`, `Publishing`, `Done` respectively). Dropping anywhere else shows a toast ("Can't move a task directly from X to Y") and the card stays put — domain correctness (INV-3) enforced in the interaction itself, not just the backend. Columns visually highlight as a valid/invalid target while a drag is in progress.
 - **Task creation**: a `Dialog` (not an inline form) — project select + title input, `POST /tasks` per [[000-Vision]] UC-3.
-- **Task detail panel**: a `Sheet` sliding from the right — description, acceptance-criteria checklist, live event timeline, per-run cost, all polling every 2s. Shows `PlannerStarted → PlannerInvokingModel → PlannerCompleted` in near-real-time during a real (multi-second) Claude call — validated live in-browser, not just by inspection.
+- **Task detail panel**: a `Sheet` sliding from the right — description, acceptance-criteria checklist, live event timeline, per-run cost. Shows `PlannerStarted → PlannerInvokingModel → PlannerCompleted` in near-real-time during a real (multi-second) Claude call.
+- **Column hints** (founder-requested): a short, always-visible, amber-highlighted line above every column header explaining what happens in/to a task there (e.g. Awaiting Publish → "Drag/click Publish when ready") — makes the board self-explanatory without hovering or reading docs.
+- **Real-time via WebSocket** (`useTaskWebSocket`, [[007-ExecutionEngine]] §4): the task detail panel connects to `/ws/tasks/{id}` and refetches the instant a "refresh" push arrives — validated live with sub-second delivery. A 10s poll (`refetchInterval`) remains only as a fallback for a dropped socket, not the primary mechanism anymore. The board's own task list still polls every 2s and does **not** yet have a WebSocket (would need one connection per visible task or a board-wide channel that doesn't exist — see [[007-ExecutionEngine]] §6).
 - **Toasts** (Sonner) for action feedback (task created, promoted, published, approved, drag rejected) instead of silent state changes.
-- **Live-ish updates**: 2s polling (`refetchInterval`) on both the board and the detail panel.
 
 ## 4. What's Explicitly Not Built Yet
 
 - **Navigation / other views**: Projects list, Execution view, Logs, Metrics, Models, Workers, Settings — none exist.
 - **Diff/commits view** in the task detail panel — meaningless until there's a real diff to show beyond the commit message already in the timeline.
-- **Real-time via WebSocket**: 2-second polling is a deliberate stand-in for both the board and the detail panel. [[007-ExecutionEngine]] §4 already specifies the real design; the activities now produce real trace events, so a WebSocket layer is additive, not a rework.
+- **Board-wide real-time**: only the (single, currently-open) task detail panel has a WebSocket; the board's cross-task list still polls every 2s.
 - **Board views beyond Kanban** (list, timeline, tree) — post-v1 per [[000-Vision]] §7.
 - **Light/dark toggle UI** — both themes are fully defined in CSS, but there's no control to switch; dark is hardcoded via the `class="dark"` on `<html>`.
 

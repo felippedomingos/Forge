@@ -28,6 +28,12 @@ export function BoardColumn({ state, tasks, onOpenTask, draggingFromState }: Boa
 
   return (
     <div className="flex min-w-0 flex-col">
+      {/* Founder-requested: always-visible explanation of what this column means/does,
+          highlighted so it's immediately clear to anyone looking at the board, not
+          just whoever built it - amber to match the accent, not a hover-only tooltip. */}
+      <div className="mb-1.5 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-1">
+        <p className="text-[10px] leading-tight text-primary/90">{config.hint}</p>
+      </div>
       <div className="mb-2 flex items-center gap-1.5 px-0.5">
         <config.icon className={cn('size-3.5 shrink-0 text-muted-foreground', config.spin && 'animate-spin')} />
         <h2 className="truncate text-xs font-medium text-foreground">{config.label}</h2>

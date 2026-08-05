@@ -1,4 +1,6 @@
+using System.Net.WebSockets;
 using System.Text.Json.Serialization;
+using Forge.Api;
 using Forge.Domain.Entities;
 using Forge.Infrastructure;
 using Forge.Workflows;
@@ -50,9 +52,16 @@ builder.Services.AddSingleton(await TemporalClient.ConnectAsync(new TemporalClie
     Namespace = "default",
 }));
 
+// docs/007-ExecutionEngine.md §4 - the WebSocket trace channel, real now (not just
+// documented): PostgresNotificationListener bridges Postgres NOTIFY (fired by
+// Forge.Workflows activities, a separate process) to these in-memory connections.
+builder.Services.AddSingleton<TaskEventBroadcaster>();
+builder.Services.AddHostedService<PostgresNotificationListener>();
+
 var app = builder.Build();
 
 app.UseCors();
+app.UseWebSockets();
 
 const string TaskQueue = "forge-task-queue";
 static string WorkflowIdFor(Guid taskId) => $"task-{taskId}";
@@ -147,6 +156,41 @@ app.MapGet("/tasks/{id:guid}/cost", async (ForgeDbContext db, Guid id) =>
     });
 });
 
+// docs/012-API.md §3 / docs/007-ExecutionEngine.md §4 - one WebSocket per task,
+// pushed a "refresh" signal whenever PostgresNotificationListener sees a NOTIFY for
+// this task ID. Clients re-fetch GET /tasks/{id} and /tasks/{id}/events over REST on
+// receiving it - this channel carries no data of its own, deliberately (§ see
+// TaskEventBroadcaster).
+app.Map("/ws/tasks/{id:guid}", async (HttpContext context, Guid id, TaskEventBroadcaster broadcaster) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+    broadcaster.Add(id, socket);
+
+    var buffer = new byte[1024];
+    try
+    {
+        while (socket.State == WebSocketState.Open)
+        {
+            var result = await socket.ReceiveAsync(buffer, CancellationToken.None);
+            if (result.MessageType == WebSocketMessageType.Close) break;
+        }
+    }
+    catch (WebSocketException)
+    {
+        // client disconnected without a clean close handshake - fine, just clean up below
+    }
+    finally
+    {
+        broadcaster.Remove(id, socket);
+    }
+});
+
 app.MapPost("/tasks/{id:guid}/answers", async (ForgeDbContext db, TemporalClient temporal, Guid id, AnswerQuestionsRequest request) =>
 {
     // docs/012-API.md §2: answers are meaningful data, recorded before the signal that
@@ -162,10 +206,23 @@ app.MapPost("/tasks/{id:guid}/answers", async (ForgeDbContext db, TemporalClient
         Actor = "user:unknown", // docs/014-Security.md: no auth model yet to attribute a real user
     });
     await db.SaveChangesAsync();
+    await PostgresNotify.TaskChangedAsync(db, id);
 
     var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
     await handle.SignalAsync(wf => wf.AnswerQuestionsAsync());
     return Results.Ok();
+});
+
+// docs/015-Deployment.md §5 open item: no endpoint existed to configure a
+// PublishRecipe - it was set via direct SQL for testing. This closes that gap.
+app.MapPatch("/projects/{id:guid}/publish-recipe", async (ForgeDbContext db, Guid id, PublishRecipeRequest request) =>
+{
+    var project = await db.Projects.FindAsync(id);
+    if (project is null) return Results.NotFound();
+
+    project.PublishRecipe = System.Text.Json.JsonSerializer.Serialize(request);
+    await db.SaveChangesAsync();
+    return Results.Ok(project);
 });
 
 // Manual override now that BacklogSchedulerWorkflow exists (it normally promotes tasks
@@ -207,3 +264,5 @@ record CreateProjectRequest(string Name, string RepositoryUrl, string RootBranch
 record CreateTaskRequest(Guid ProjectId, string Title);
 record AnswerQuestionsRequest(List<string> Answers);
 record MoveTaskRequest(TaskState TargetState);
+// docs/015-Deployment.md §2 - matches AgentActivities.PublishRecipeDto's shape exactly.
+record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTargets, string? HealthCheckUrl);

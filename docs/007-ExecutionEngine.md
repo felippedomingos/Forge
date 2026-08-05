@@ -31,12 +31,18 @@ If a task re-enters `Blocked` mid-execution and later resumes ([[004-Workflow]] 
 
 ## 4. Live Trace / Event Streaming (UC-9)
 
-Two distinct channels, not one, because they serve different purposes:
+**Implemented, not just designed.** The actual mechanism ended up simpler than the two-channel design originally sketched here, and doesn't use Temporal Activity Heartbeats at all:
 
-1. **Temporal Activity Heartbeats** — the agent activity calls `RecordHeartbeat` periodically with a small liveness payload. This is what lets Temporal detect a genuinely hung activity and apply its timeout/retry policy ([[006-Scheduler]] §3) — a liveness signal, not a verbose log (heartbeat payloads have a size limit and aren't meant for detailed streaming).
-2. **Forge API trace endpoint** — the activity implementation also pushes each meaningful step (file read, command executed, a reasoning checkpoint) directly to the Forge API as it happens, which the API fans out over WebSocket to any frontend client with that task open. This is what actually renders as the "watch the agent work" view in [[000-Vision]] UC-9 and [[013-Frontend]] — a live append-only trace, not a poll against Temporal's history API (which is optimized for workflow replay, not for a smooth UI feed).
+1. Every agent activity writes real `Event` rows to Postgres as it runs (`RecordEventAsync` in `AgentActivities`/`PersistenceActivities`, docs/003-Domain.md §4's catalog) — this was already true before live streaming existed, and remains the durable record.
+2. Each write also issues a Postgres `NOTIFY task_events, '<task-id>'` (`PostgresNotify.TaskChangedAsync`, `Forge.Workflows`).
+3. Forge.Api's `PostgresNotificationListener` (a `BackgroundService`) holds one dedicated `LISTEN task_events` connection, and on each notification calls `TaskEventBroadcaster.NotifyAsync(taskId)`.
+4. `TaskEventBroadcaster` holds in-memory WebSocket connections per task ID (`/ws/tasks/{id}`, [[012-API]] §3) and pushes a minimal `"refresh"` message — no event data travels over the socket itself, the frontend re-fetches `GET /tasks/{id}` and `/tasks/{id}/events` on receiving it. Keeps the socket layer dumb; the REST endpoints stay the single source of truth for shape.
 
-Both channels are backed by the same underlying `Run` entity ([[003-Domain]]) — heartbeats keep Temporal's own view of liveness current, while the trace endpoint's entries are what a human actually reads.
+This decouples the Worker process (which has no idea the API or any frontend exists) from the API's WebSocket connections entirely through Postgres — no direct Worker→API call. **Validated live**: a raw WebSocket client connected before creating a task received `refresh` messages within milliseconds of each `Event` write, well ahead of the 10s fallback poll the frontend keeps as a safety net for a dropped socket.
+
+**Real bug found and fixed during this validation**: the first implementation used EF Core's parameterized `ExecuteSqlAsync` for the `NOTIFY` call, which failed every single task workflow with `42601: syntax error at or near '$1'` — PostgreSQL's `NOTIFY` grammar only accepts the payload as a string literal, not a bind parameter, even through the extended query protocol. Fixed by using `ExecuteSqlRawAsync` with an explicit `#pragma warning disable EF1002` and a comment justifying why it's safe (the value is a typed `Guid`, not user input — no injection surface despite the analyzer's blanket warning).
+
+Temporal Activity Heartbeats (for hang detection feeding [[006-Scheduler]] §3's retry policy) remain undesigned/unimplemented — a separate concern from the trace feed above, not yet needed since no activity has hung in practice.
 
 ## 5. Cost and Token Accounting
 
@@ -44,5 +50,6 @@ Every agent activity updates its `Run` row ([[003-Domain]]) as it consumes token
 
 ## 6. Open Questions
 
-- Whether the Forge API trace endpoint should also persist to the `Event` table (making it queryable/replayable after the fact) or is purely a live/ephemeral WebSocket feed — leaning towards persisting it, since [[000-Vision]] §5 commits to a complete audit trail, but not decided here.
-- Exact heartbeat interval and activity timeout defaults per agent role — needs real numbers once a Developer agent actually runs against a project, not guessed at in the abstract.
+- Temporal Activity Heartbeats for hang detection — not implemented; revisit if an activity actually hangs in practice rather than designing against a hypothetical.
+- Exact activity timeout defaults per agent role beyond what's already in [[006-Scheduler]] §3's retry table — needs more real runs to tune, not guessed at further here.
+- `TaskEventBroadcaster`'s in-memory connection registry only works for a single API process — fine at [[002-Architecture]] §4's current single-node scale, would need a real pub/sub (or rely on Postgres NOTIFY being received by every API instance, which it already is) once there's more than one Api replica.

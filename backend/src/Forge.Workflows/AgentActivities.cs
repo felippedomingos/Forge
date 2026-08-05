@@ -106,6 +106,7 @@ public static class AgentActivities
             Actor = $"agent:{actorRole}",
         });
         await db.SaveChangesAsync();
+        await PostgresNotify.TaskChangedAsync(db, taskId);
     }
 
     // docs/005-Agents.md §2. Real implementation: shells out to the Claude Code CLI

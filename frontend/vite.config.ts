@@ -18,6 +18,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:5080',
         changeOrigin: true,
+        ws: true, // docs/007-ExecutionEngine.md §4 - proxies /api/ws/tasks/{id} too
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },

@@ -16,10 +16,13 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { STATE_CONFIG } from '@/lib/state-config'
 import { api } from '@/lib/api'
+import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
 
 // docs/000-Vision.md UC-9: click a task, see what it does and how the agent is
-// working right now if it's in progress. Polls every 2s while open - stand-in for
-// the WebSocket channel docs/007-ExecutionEngine.md §4 describes as the target.
+// working right now if it's in progress. The WebSocket (docs/007-ExecutionEngine.md
+// §4) is the real, fast path now - it wakes a refetch the instant Postgres NOTIFYs;
+// the 10s poll below is just a fallback for a dropped/blocked socket, not the
+// primary mechanism anymore.
 export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
   const queryClient = useQueryClient()
   const [answerText, setAnswerText] = useState('')
@@ -28,13 +31,18 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
     queryKey: ['task', taskId],
     queryFn: () => api.getTask(taskId!),
     enabled: !!taskId,
-    refetchInterval: 2000,
+    refetchInterval: 10000,
   })
   const eventsQuery = useQuery({
     queryKey: ['task-events', taskId],
     queryFn: () => api.getTaskEvents(taskId!),
     enabled: !!taskId,
-    refetchInterval: 2000,
+    refetchInterval: 10000,
+  })
+
+  useTaskWebSocket(taskId, () => {
+    queryClient.invalidateQueries({ queryKey: ['task', taskId] })
+    queryClient.invalidateQueries({ queryKey: ['task-events', taskId] })
   })
 
   const invalidate = () => {
