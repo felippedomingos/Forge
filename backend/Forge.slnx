@@ -4,5 +4,6 @@
     <Project Path="src/Forge.Domain/Forge.Domain.csproj" />
     <Project Path="src/Forge.Infrastructure/Forge.Infrastructure.csproj" />
     <Project Path="src/Forge.Worker/Forge.Worker.csproj" />
+    <Project Path="src/Forge.Workflows/Forge.Workflows.csproj" />
   </Folder>
 </Solution>

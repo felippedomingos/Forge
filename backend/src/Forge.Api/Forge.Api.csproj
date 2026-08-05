@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Forge.Infrastructure\Forge.Infrastructure.csproj" />
+    <ProjectReference Include="..\Forge.Workflows\Forge.Workflows.csproj" />
   </ItemGroup>
 
   <ItemGroup>

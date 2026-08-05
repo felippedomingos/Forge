@@ -1,14 +1,12 @@
-using Temporalio.Activities;
+using Forge.Workflows;
 using Temporalio.Client;
 using Temporalio.Worker;
 using Temporalio.Workflows;
+using Temporalio.Activities;
 
 // docs/007-ExecutionEngine.md §1: a Worker process polls a Temporal task queue and hosts
-// the agent activity implementations. This is a connectivity skeleton only - it proves
-// the SDK wiring against docker/local's Temporal server. The real workflow implementing
-// docs/004-Workflow.md's full state machine, and the 5 agent activities from
-// docs/005-Agents.md, are deliberately NOT implemented here yet - that's substantial
-// business logic for its own dedicated pass, not something to rush into a skeleton.
+// the agent activity implementations. Hosts the real TaskWorkflow (docs/004-Workflow.md)
+// and the 5 agent activity stubs (docs/005-Agents.md) from Forge.Workflows.
 
 var targetHost = Environment.GetEnvironmentVariable("TEMPORAL_ADDRESS") ?? "localhost:7233";
 
@@ -22,30 +20,17 @@ Console.WriteLine($"Connected to Temporal at {targetHost}");
 
 using var worker = new TemporalWorker(client, new TemporalWorkerOptions("forge-task-queue")
 {
-    Workflows = { WorkflowDefinition.Create(typeof(PlaceholderWorkflow)) },
-    Activities = { ActivityDefinition.Create(PlaceholderActivities.NoOpAsync) }
+    Workflows = { WorkflowDefinition.Create(typeof(TaskWorkflow)) },
+    Activities =
+    {
+        ActivityDefinition.Create(AgentActivities.PlanAsync),
+        ActivityDefinition.Create(AgentActivities.DevelopAsync),
+        ActivityDefinition.Create(AgentActivities.DeployAsync),
+        ActivityDefinition.Create(AgentActivities.GitFinalizeAsync),
+        ActivityDefinition.Create(AgentActivities.PrioritizeAsync),
+        ActivityDefinition.Create(PersistenceActivities.PersistTaskStateAsync),
+    }
 });
 
 Console.WriteLine("Worker polling task queue 'forge-task-queue' - press Ctrl+C to stop.");
 await worker.ExecuteAsync(CancellationToken.None);
-
-// TODO(next pass): replace with the real per-task workflow from docs/004-Workflow.md
-// and the Planner/Prioritizer/Developer/Deploy/Git activities from docs/005-Agents.md.
-[Workflow]
-public class PlaceholderWorkflow
-{
-    [WorkflowRun]
-    public async Task<string> RunAsync()
-    {
-        return await Workflow.ExecuteActivityAsync(
-            () => PlaceholderActivities.NoOpAsync(),
-            new ActivityOptions { StartToCloseTimeout = TimeSpan.FromSeconds(30) });
-    }
-}
-
-public static class PlaceholderActivities
-{
-    [Activity]
-    public static Task<string> NoOpAsync() =>
-        Task.FromResult("placeholder - real agent activities land in a later pass");
-}
