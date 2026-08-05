@@ -18,13 +18,15 @@ Vite + React + TypeScript + Tailwind v4 (via the `@tailwindcss/vite` plugin, not
   - `AwaitingPublish` → "Publish" (`POST /tasks/{id}/move`, target `Publishing`)
   - `Review` → "Approve → Done" (`POST /tasks/{id}/move`, target `Done`)
 - **Live-ish updates**: the task list polls every 2 seconds (`refetchInterval`) so automatic transitions (e.g. `Inbox → Backlog` the instant the Planner activity completes) show up without a manual refresh.
+- **Task detail panel** (founder-requested, [[000-Vision]] UC-9): clicking a card opens a slide-over panel with description, an acceptance-criteria checklist, a live event timeline, and per-run cost — all polling every 2s. This is what actually shows "the agent is working" while a task is mid-`Inbox`/`Executing`/etc: the timeline shows `PlannerStarted` → `PlannerInvokingModel` → `PlannerCompleted` in near-real-time during a real (multi-second) Claude call.
 
 ## 3. What's Explicitly Not Built Yet
 
-- **Navigation / other views**: Projects list, Execution view, Logs, Metrics, Models, Workers, Settings — none exist. Today's app is the Kanban board and nothing else.
-- **Task detail view**: no per-task page showing description, acceptance criteria, sub-tasks, diff, commits, or the live agent trace from [[000-Vision]] UC-9. Clicking a card does nothing today.
-- **Real-time via WebSocket**: 2-second polling is a deliberate stand-in, not the target mechanism. [[007-ExecutionEngine]] §4 already specifies the real design (a WebSocket channel per task, fed by the agent activity's trace calls) — implementing it requires the activities to actually produce a trace, which they don't yet since [[005-Agents]]'s roles are still stubs.
+- **Navigation / other views**: Projects list, Execution view, Logs, Metrics, Models, Workers, Settings — none exist. Today's app is the Kanban board (plus the task detail panel) and nothing else.
+- **Diff/commits view**: the task detail panel shows description/criteria/events/cost, not a code diff or commit list — meaningless until the Developer/Git agents actually touch code.
+- **Real-time via WebSocket**: 2-second polling is a deliberate stand-in, not the target mechanism, for both the board and the task detail panel. [[007-ExecutionEngine]] §4 already specifies the real design (a WebSocket channel per task) — the activities now produce real trace events (via the `events` table), so a WebSocket layer could be added without changing what data exists, only how it's delivered.
 - **Board views beyond Kanban** (list, timeline, tree) — post-v1 per [[000-Vision]] §7's note that Kanban is one view among several eventually.
+- **Visual design**: the founder has flagged visual/design concerns to revisit later — current styling is deliberately minimal (plain Tailwind utilities, no design system) and not treated as final.
 
 ## 4. Design Notes
 
@@ -34,5 +36,5 @@ Vite + React + TypeScript + Tailwind v4 (via the `@tailwindcss/vite` plugin, not
 
 ## 5. Open Questions
 
-- Once the task detail view exists, does it live at a real route (requiring a router) or as a modal/drawer over the board? Not decided — depends on how much state (execution trace, diff viewer) it needs to hold, which isn't known until [[007-ExecutionEngine]]'s WebSocket channel is real.
+- The task detail panel is a client-side overlay (no router, no real route/URL) — fine for now, revisit if deep-linking to a specific task becomes a real need.
 - Whether polling should stay as a fallback even after WebSocket exists (e.g. for clients that lose the socket) — reasonable, not designed yet.
