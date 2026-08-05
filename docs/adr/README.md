@@ -22,6 +22,7 @@ Do not write an ADR for reversible implementation details (variable naming, fold
 - [ADR-0002](ADR-0002-github-first-git-provider.md) — GitHub as the first Git/issue-tracker plugin
 - [ADR-0003](ADR-0003-claude-only-model-router-v1.md) — Claude-only Model Router for v1
 - [ADR-0004](ADR-0004-dedicated-infrastructure.md) — Dedicated infrastructure for Forge
+- [ADR-0005](ADR-0005-claude-code-cli-as-invocation-mechanism.md) — Claude Code CLI (interactive auth) as the agent invocation mechanism
 
 ## Template
 

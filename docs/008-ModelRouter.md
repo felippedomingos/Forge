@@ -19,7 +19,7 @@ interface ModelProvider {
 
 `AgentRequest` carries the agent role, the prompt/context, and the MCP tool set that role is allowed to use ([[009-MCP]], [[005-Agents]] §8). `AgentResult` carries the output plus token usage, feeding the `Run` row directly ([[003-Domain]], [[007-ExecutionEngine]] §5).
 
-Per [[ADR-0003]], exactly one implementation exists at v1: `AnthropicClaudeProvider`, wrapping the Claude Agent SDK. The interface is designed so a second implementation is additive — a new class plus a new `models` row ([[011-Database]]) — never a change to the interface itself or to agent code.
+Per [[ADR-0003]], exactly one implementation exists at v1: `ClaudeCliProvider`. Per [[ADR-0005]], it wraps the **Claude Code CLI as a subprocess** (`claude -p`, interactive-subscription auth) rather than a raw Anthropic API/SDK call — removing the separate API-credential prerequisite for single-account use. The interface is designed so a second implementation (another provider, or a multi-account `ClaudeCliProviderPool` per [[ADR-0005]]'s fallback design) is additive — never a change to the interface itself or to agent code.
 
 ## 2. Routing Inputs (Designed Now, Exercised Later)
 
