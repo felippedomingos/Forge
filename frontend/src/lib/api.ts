@@ -58,4 +58,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ projectId, title }),
     }),
+  // docs/006-Scheduler.md §1: stand-in for the BacklogSchedulerWorkflow, which doesn't
+  // exist yet - manually promotes one task instead of priority-ordered auto-promotion.
+  promoteTask: (taskId: string) =>
+    request<void>(`/tasks/${taskId}/promote`, { method: 'POST' }),
+  // docs/012-API.md §2 - only the two human-gated transitions this endpoint owns
+  // (AwaitingPublish->Publishing, Review->Done). Blocked->Inbox goes through answers().
+  moveTask: (taskId: string, targetState: 'Publishing' | 'Done') =>
+    request<void>(`/tasks/${taskId}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ targetState }),
+    }),
+  answerTask: (taskId: string, answers: string[]) =>
+    request<void>(`/tasks/${taskId}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    }),
 }

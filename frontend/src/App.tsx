@@ -1,6 +1,82 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, TASK_STATES, type TaskState } from './lib/api'
+import { api, TASK_STATES, type TaskItem, type TaskState } from './lib/api'
+
+// docs/012-API.md endpoints wired to contextual per-state actions - the only states
+// with a human-gated transition (docs/003-Domain.md §3): Blocked (answer), Backlog
+// (promote - stand-in for the missing BacklogSchedulerWorkflow, docs/006-Scheduler.md
+// §1), AwaitingPublish (publish), Review (approve). Every other state only advances
+// on its own via the workflow's own agent activities.
+function TaskCard({ task }: { task: TaskItem }) {
+  const queryClient = useQueryClient()
+  const [answerText, setAnswerText] = useState('')
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['tasks'] })
+
+  const promote = useMutation({ mutationFn: () => api.promoteTask(task.id), onSuccess: invalidate })
+  const publish = useMutation({ mutationFn: () => api.moveTask(task.id, 'Publishing'), onSuccess: invalidate })
+  const approve = useMutation({ mutationFn: () => api.moveTask(task.id, 'Done'), onSuccess: invalidate })
+  const answer = useMutation({
+    mutationFn: () => api.answerTask(task.id, [answerText]),
+    onSuccess: () => {
+      setAnswerText('')
+      invalidate()
+    },
+  })
+
+  return (
+    <div className="rounded border border-neutral-200 bg-white p-3 text-sm shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+      <p className="mb-2">{task.title}</p>
+
+      {task.state === 'Blocked' && (
+        <div className="flex flex-col gap-1">
+          <input
+            className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800"
+            placeholder="Answer the Planner's question…"
+            value={answerText}
+            onChange={(e) => setAnswerText(e.target.value)}
+          />
+          <button
+            className="rounded bg-neutral-900 px-2 py-1 text-xs text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+            disabled={!answerText || answer.isPending}
+            onClick={() => answer.mutate()}
+          >
+            Answer → back to Inbox
+          </button>
+        </div>
+      )}
+
+      {task.state === 'Backlog' && (
+        <button
+          className="rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700"
+          disabled={promote.isPending}
+          onClick={() => promote.mutate()}
+        >
+          Promote to Todo →
+        </button>
+      )}
+
+      {task.state === 'AwaitingPublish' && (
+        <button
+          className="rounded bg-emerald-600 px-2 py-1 text-xs text-white disabled:opacity-40"
+          disabled={publish.isPending}
+          onClick={() => publish.mutate()}
+        >
+          Publish →
+        </button>
+      )}
+
+      {task.state === 'Review' && (
+        <button
+          className="rounded bg-emerald-600 px-2 py-1 text-xs text-white disabled:opacity-40"
+          disabled={approve.isPending}
+          onClick={() => approve.mutate()}
+        >
+          Approve → Done
+        </button>
+      )}
+    </div>
+  )
+}
 
 // First slice of docs/013-Frontend.md's Kanban board (docs/000-Vision.md §9 states).
 // Cross-project view (UC-1): no project filter applied by default.
@@ -10,7 +86,14 @@ function Board() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
 
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: api.listProjects })
-  const tasksQuery = useQuery({ queryKey: ['tasks'], queryFn: () => api.listTasks() })
+  // 2s polling stands in for the real WebSocket trace (docs/007-ExecutionEngine.md §4)
+  // so automatic transitions (Inbox->Backlog, etc, driven by the workflow's own agent
+  // activities, not a human click) show up without a manual refresh.
+  const tasksQuery = useQuery({
+    queryKey: ['tasks'],
+    queryFn: () => api.listTasks(),
+    refetchInterval: 2000,
+  })
 
   const createTask = useMutation({
     mutationFn: () => api.createTask(selectedProjectId, newTitle),
@@ -78,12 +161,7 @@ function Board() {
             </h2>
             <div className="flex flex-col gap-2">
               {tasksByState(state).map((task) => (
-                <div
-                  key={task.id}
-                  className="rounded border border-neutral-200 bg-white p-3 text-sm shadow-sm dark:border-neutral-800 dark:bg-neutral-900"
-                >
-                  {task.title}
-                </div>
+                <TaskCard key={task.id} task={task} />
               ))}
             </div>
           </div>
