@@ -1,0 +1,11 @@
+# .NET
+bin/
+obj/
+*.user
+
+# Claude Code session-local files
+.claude/scheduled_tasks.lock
+.claude/*.log
+
+# OS
+.DS_Store
