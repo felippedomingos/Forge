@@ -17,6 +17,7 @@ Extends [[003-Domain]] §3's happy-path table (rows 1–10 there are unchanged) 
 | 11 | `Executing` | `Blocked` | `DeveloperNeedsClarification` | Developer agent | See §3 — reuses `Blocked` rather than introducing an execution-specific blocked state. |
 | 12 | `Publishing` | `AwaitingPublish` | `DeployFailed` | Deploy agent | See §5 — bounces back to the human gate rather than auto-retrying. |
 | 13 | `Executing` | `Executing` (retry, no state change) | activity retry per Temporal policy | Temporal (transient failure) | Not a domain-visible transition — see §4. |
+| 14 | `Review` | `Todo` | `ReviewRequestedChanges` | User | Founder-requested, added live: a reviewer can send a task back for another Developer pass instead of only approving. See §3a. |
 
 No other edges are legal. In particular, there is no `Done → *` or `Production → *` edge: once a task reaches `Done`, the only further automatic move is the confirmation into `Production` (row 10 in [[003-Domain]]); anything discovered wrong after that point is a new Task, not a reopening of this one.
 
@@ -31,7 +32,13 @@ No other edges are legal. In particular, there is no `Done → *` or `Production
 
 Practical consequence for the Developer agent: if a Task re-enters `Todo` after having previously reached `Executing`, its `Worktree` and branch are **not** recreated — the scheduler must detect an existing non-deleted `Worktree` row for that task and resume the Developer agent against it rather than starting fresh. This is a requirement to carry into [[007-ExecutionEngine]], not yet implemented anywhere.
 
-## 4. Retries vs. State Transitions
+## 3a. Review → Todo: a deliberately different re-entry than Blocked
+
+Founder-requested, found necessary live: dogfooding Forge on itself, a task reached `Review` with nothing actually deployed to inspect (the project's `PublishRecipe` was empty), and the only available action was "approve blindly" — not acceptable once a human is actually meant to look at the result before signing off. Row 14 (§2) adds `Review → Todo` (`ReviewRequestedChanges`) as the reviewer's other option besides approving.
+
+**This deliberately does *not* reuse the `Blocked`/`Inbox` re-entry pattern from §3.** Re-entering through `Inbox` would re-run the Planner — but the plan (`Task.Description`/`AcceptanceCriteria`) was never the problem; the *implementation* was. `TaskWorkflow.RunAsync` instead wraps only the `AwaitingPublish → Publishing → Deploy → Review` portion in its own loop: a rejection goes `Review → Todo → Executing` directly, re-running only the Developer agent, against the **same worktree** (same rule as §3's Developer-resume case) with one addition — the reviewer's comment is recorded as a `ReviewRequestedChanges` event and read by the next `DevelopAsync` invocation (`AgentActivities.GetLatestReviewFeedbackAsync`), so the agent knows what specifically to fix rather than re-guessing. If that rework pass itself needs a genuine clarifying question, *that* still goes through `Blocked`/`Inbox` per §3 — only the "reviewer said do this differently" path skips Planner.
+
+A task can bounce between `Review` and this rework loop more than once; `GetLatestReviewFeedbackAsync` only surfaces the most recent comment to the Developer agent, not the full history of every round - simplest thing that works today, and every round is still a permanent `Event` row for a human reading the timeline even if the agent only sees the latest.
 
 Not every failure is domain-visible. A transient failure inside an agent's activity (a tool call timing out, a rate limit, a dropped connection) is retried by Temporal's built-in activity retry policy ([[ADR-0001]]) without the Task ever leaving `Executing` — row 13 above exists only to make this explicit, not because it's a real domain transition.
 

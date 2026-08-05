@@ -12,6 +12,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { STATE_CONFIG } from '@/lib/state-config'
@@ -26,6 +27,7 @@ import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
 export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
   const queryClient = useQueryClient()
   const [answerText, setAnswerText] = useState('')
+  const [changesComment, setChangesComment] = useState('')
 
   const taskQuery = useQuery({
     queryKey: ['task', taskId],
@@ -80,6 +82,17 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
     onSuccess: () => {
       toast.success('Answer sent — back to the Planner.')
       setAnswerText('')
+      invalidate()
+    },
+  })
+  // docs/004-Workflow.md row 14 - founder-requested: send back for another Developer
+  // pass instead of only approving. The comment is what DevelopAsync's next run
+  // actually sees (AgentActivities.GetLatestReviewFeedbackAsync).
+  const requestChanges = useMutation({
+    mutationFn: () => api.requestChanges(taskId!, changesComment),
+    onSuccess: () => {
+      toast.success('Sent back for another pass.')
+      setChangesComment('')
       invalidate()
     },
   })
@@ -185,22 +198,44 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
                 </Button>
               )}
               {task.state === 'Review' && (
-                <div className="flex gap-2">
-                  {previewUrl && (
+                <section className="flex flex-col gap-2.5">
+                  <div className="flex gap-2">
+                    {previewUrl && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5"
+                        onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}
+                      >
+                        <ExternalLink className="size-3.5" />
+                        Testar
+                      </Button>
+                    )}
+                    <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate()}>
+                      Approve → Done
+                    </Button>
+                  </div>
+
+                  {/* Founder-requested: reject a Review-stage task back for another
+                      Developer pass with feedback, instead of only approving forward. */}
+                  <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-border/60 p-2.5">
+                    <Textarea
+                      placeholder="O que funcionou, o que não funcionou, o que ajustar…"
+                      value={changesComment}
+                      onChange={(e) => setChangesComment(e.target.value)}
+                      className="min-h-14 text-xs"
+                    />
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="gap-1.5"
-                      onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}
+                      variant="secondary"
+                      className="w-fit"
+                      disabled={!changesComment || requestChanges.isPending}
+                      onClick={() => requestChanges.mutate()}
                     >
-                      <ExternalLink className="size-3.5" />
-                      Testar
+                      Solicitar ajustes → Todo
                     </Button>
-                  )}
-                  <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate()}>
-                    Approve → Done
-                  </Button>
-                </div>
+                  </div>
+                </section>
               )}
 
               <Separator />

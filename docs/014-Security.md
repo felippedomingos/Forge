@@ -34,11 +34,11 @@ Worth stating plainly given [[000-Vision]]'s own framing (an autonomous agent wi
 
 ## 6. Audit Trail
 
-Already substantially covered by [[003-Domain]] §4's event catalog and [[002-Architecture]] §6 — every state transition is an `Event` row plus a Temporal workflow history entry. What's missing from a security-audit perspective specifically: `Event.Actor` records `"user:<id>"` / `"agent:<role>"` per [[003-Domain]] §4's schema, but nothing yet resolves a JWT's `sub` claim into that `user:<id>` at the point a human action (task creation, a move, an answer) is recorded - so today's events don't yet distinguish *which* authenticated user did something, only that some agent role did. Worth closing now that AuthN actually exists to attribute to.
+Already substantially covered by [[003-Domain]] §4's event catalog and [[002-Architecture]] §6 — every state transition is an `Event` row plus a Temporal workflow history entry. **Partially closed**: `POST /tasks/{id}/answers` and the new `POST /tasks/{id}/request-changes` ([[012-API]]) now resolve the caller's JWT (`ClaimsPrincipal.FindFirstValue(ClaimTypes.NameIdentifier)`) into a real `Event.Actor` (`"user:<id>"`) instead of the placeholder `"user:unknown"` from before AuthN existed. Not yet done for every human-originated event (`POST /tasks`, `/move`, `/promote`, project CRUD) — same fix, just not applied everywhere yet.
 
 ## 7. Open Questions
 
 - Secrets storage mechanism (§2) — genuinely undecided.
-- Threading the authenticated user's identity into `Event.Actor` (§6) — AuthN exists now, this is no longer blocked on it, just not done yet.
+- Finishing the `Event.Actor` attribution (§6) across the remaining human-originated endpoints — the pattern is proven (answers, request-changes), just needs repeating.
 - Password reset flow — doesn't exist. An Admin would need to directly update a `PasswordHash` today. Reasonable v2 addition once there's more than a couple of real accounts.
 - 24h fixed JWT expiration, no refresh-token rotation ([[adr/ADR-0006]]) — a deliberate v1 simplification for a small team, revisit if daily re-login becomes a real annoyance rather than a hypothetical one.

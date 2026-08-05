@@ -350,6 +350,19 @@ public static class AgentActivities
             : "(none recorded - use judgment based on the description)";
 
         var memory = await FormatMemoryAsync(db, task.ProjectId);
+        // Founder-requested: a reviewer sending this task back from Review (§ the new
+        // "Request changes" action) leaves feedback here - surfaced on every rework
+        // pass, not just the one right after it was left, since a task can bounce
+        // back and forth more than once.
+        var reviewFeedback = await GetLatestReviewFeedbackAsync(db, taskId);
+        var reviewFeedbackSection = reviewFeedback is null
+            ? ""
+            : $$"""
+
+                A human reviewer sent this task back with feedback on your previous
+                attempt - address it directly, it takes priority over guessing:
+                {{reviewFeedback}}
+                """;
         var prompt = $$"""
             You are the Developer agent inside Forge. You are on a dedicated git branch
             in a real checkout - it is safe to edit files here.
@@ -363,6 +376,7 @@ public static class AgentActivities
             Description: {{task.Description}}
             Acceptance Criteria:
             {{criteriaText}}
+            {{reviewFeedbackSection}}
 
             Make the necessary code changes to satisfy the acceptance criteria. Keep
             changes minimal and focused only on this task. Do not commit - Forge commits
@@ -475,12 +489,18 @@ public static class AgentActivities
     }
 
     // docs/005-Agents.md §5, docs/015-Deployment.md §2/§3. Runs `migrationCommand`,
-    // then each `restartTargets` entry as `docker compose restart <target>` (the shape
-    // the recipe documents - "Docker Compose service names to restart, in order"),
-    // then polls `healthCheckUrl` before declaring success - the full recipe, not just
-    // the migration step. Gated on Project.AllowAgentBypassPermissions, same reasoning
-    // as DevelopAsync: this executes arbitrary shell commands unattended, which needs
-    // the same explicit per-project trust as editing files does.
+    // then each `restartTargets` entry as its own shell command in order, then polls
+    // `healthCheckUrl` before declaring success - the full recipe, not just the
+    // migration step. `restartTargets` entries are raw shell commands, not bare
+    // Docker Compose service names as originally documented - found live (founder
+    // dogfooding Forge on itself) that assuming Compose specifically didn't fit a
+    // project whose own dev processes run as plain `dotnet run`/`vite`, not Compose
+    // services. A project that does use Compose just writes
+    // "docker compose restart X" as the command instead of bare "X" - strictly more
+    // flexible, no project had restartTargets configured yet so nothing to migrate.
+    // Gated on Project.AllowAgentBypassPermissions, same reasoning as DevelopAsync:
+    // this executes arbitrary shell commands unattended, which needs the same
+    // explicit per-project trust as editing files does.
     [Activity]
     public static async Task<DeployResult> DeployAsync(Guid taskId)
     {
@@ -553,12 +573,12 @@ public static class AgentActivities
 
         if (hasRestarts)
         {
-            foreach (var target in recipe!.RestartTargets!)
+            foreach (var command in recipe!.RestartTargets!)
             {
-                var (success, output) = await RunShellAsync(runDirectory, $"docker compose restart {target}");
+                var (success, output) = await RunShellAsync(runDirectory, command);
                 await RecordEventAsync(db, taskId, success ? "DeployRestartCompleted" : "DeployFailed", AgentRole.Deploy,
-                    new { target, output = Truncate(output, 1000) });
-                if (!success) return new DeployResult(false, $"Failed to restart '{target}': {Truncate(output, 500)}");
+                    new { command, output = Truncate(output, 1000) });
+                if (!success) return new DeployResult(false, $"Restart command failed ('{command}'): {Truncate(output, 500)}");
             }
         }
 
@@ -601,6 +621,7 @@ public static class AgentActivities
             "--title", task.Title,
             "--source-branch", task.BranchName!,
             "--target-branch", project.RootBranch,
+            "--output", "json",
         };
 
         if (GitOps.TryParseAzureRepo(project.RepositoryUrl) is { } repo)
@@ -611,6 +632,28 @@ public static class AgentActivities
         }
 
         return await GitOps.RunAzAsync(worktreePath, args.ToArray());
+    }
+
+    // docs/015-Deployment.md §4 - the Done->Production polling loop needs a stable URL
+    // to check merge status against, not raw CLI output text. `gh pr create --fill`
+    // prints just the PR URL as its final stdout line; `az repos pr create --output
+    // json` prints a JSON object with the web URL under `_links.web.href`.
+    private static string? ExtractPrUrl(bool isAzureDevOps, GitCommandResult result)
+    {
+        if (!result.Success) return null;
+        try
+        {
+            if (isAzureDevOps)
+            {
+                using var doc = JsonDocument.Parse(result.Stdout);
+                return doc.RootElement.GetProperty("_links").GetProperty("web").GetProperty("href").GetString();
+            }
+            return result.Stdout.Trim().Split('\n').Last().Trim();
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     [Activity]
@@ -642,11 +685,20 @@ public static class AgentActivities
 
         if (push.Success)
         {
-            var pr = project?.GitProviderPlugin?.Name == "azure-devops"
-                ? await CreateAzureDevOpsPrAsync(worktreePath, project, task)
+            var isAzureDevOps = project?.GitProviderPlugin?.Name == "azure-devops";
+            var pr = isAzureDevOps
+                ? await CreateAzureDevOpsPrAsync(worktreePath, project!, task)
                 : await GitOps.RunGhAsync(worktreePath, "pr", "create", "--fill", "--head", task.BranchName);
+
+            var prUrl = ExtractPrUrl(isAzureDevOps, pr);
+            if (prUrl is not null)
+            {
+                task.PullRequestUrl = prUrl;
+                await db.SaveChangesAsync();
+            }
+
             await RecordEventAsync(db, taskId, "PRCreated", AgentRole.Git,
-                new { success = pr.Success, output = pr.Success ? pr.Stdout.Trim() : pr.Stderr.Trim() });
+                new { success = pr.Success, url = prUrl, output = pr.Success ? pr.Stdout.Trim() : pr.Stderr.Trim() });
         }
 
         // docs/007-ExecutionEngine.md §2 - cleanup only after push(+PR); `git worktree
@@ -667,6 +719,68 @@ public static class AgentActivities
                 await RecordEventAsync(db, taskId, "WorktreeDeleted", AgentRole.Git,
                     new { success = false, stderr = remove.Stderr });
             }
+        }
+    }
+
+    // docs/015-Deployment.md §4 - resolves the previously-undesigned CI/CD integration
+    // by polling the PR's own merge status directly (provider-agnostic: `gh pr view`
+    // or `az repos pr show`) instead of a webhook receiver, which would need Forge's
+    // API reachable from GitHub/Azure DevOps - not true for a bare-metal/local
+    // deployment (ADR-0004). Returns false (never throws) on anything unexpected -
+    // a transient CLI hiccup shouldn't fail the whole polling loop, just try again
+    // next tick.
+    [Activity]
+    public static async Task<bool> CheckPullRequestMergedAsync(Guid taskId)
+    {
+        await using var db = OpenDb();
+        var task = await db.Tasks.Include(t => t.Project).ThenInclude(p => p!.GitProviderPlugin)
+            .FirstOrDefaultAsync(t => t.Id == taskId);
+        if (task?.PullRequestUrl is not { } url) return false;
+
+        try
+        {
+            if (task.Project?.GitProviderPlugin?.Name == "azure-devops")
+            {
+                var prId = url.Split("/pullrequest/").ElementAtOrDefault(1);
+                if (prId is null) return false;
+                var azResult = await GitOps.RunAzAsync(Path.GetTempPath(), "repos", "pr", "show", "--id", prId, "--output", "json");
+                if (!azResult.Success) return false;
+                using var azDoc = JsonDocument.Parse(azResult.Stdout);
+                return azDoc.RootElement.GetProperty("status").GetString() == "completed";
+            }
+
+            var ghResult = await GitOps.RunGhAsync(Path.GetTempPath(), "pr", "view", url, "--json", "state");
+            if (!ghResult.Success) return false;
+            using var ghDoc = JsonDocument.Parse(ghResult.Stdout);
+            return ghDoc.RootElement.GetProperty("state").GetString() == "MERGED";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    // docs/003-Domain.md row 9's new sibling (founder-requested): a reviewer can send
+    // a task back for another Developer pass instead of only approving. Reads the most
+    // recent "ReviewRequestedChanges" event (docs/012-API.md POST /tasks/{id}/request-
+    // changes writes it before signaling the workflow) so the next DevelopAsync run
+    // knows what the reviewer actually said, rather than blindly retrying.
+    private static async Task<string?> GetLatestReviewFeedbackAsync(ForgeDbContext db, Guid taskId)
+    {
+        var latest = await db.Events
+            .Where(e => e.TaskId == taskId && e.Type == "ReviewRequestedChanges")
+            .OrderByDescending(e => e.OccurredAt)
+            .FirstOrDefaultAsync();
+        if (latest is null) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(latest.Payload);
+            return doc.RootElement.GetProperty("comment").GetString();
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

@@ -14,6 +14,11 @@ public class TaskItem
     public TaskState State { get; set; } = TaskState.Inbox;
     public int? Priority { get; set; }
     public string? BranchName { get; set; }
+    // Set by AgentActivities.GitFinalizeAsync once the PR is actually created (at
+    // Review->Done, docs/003-Domain.md row 9->row10's GitFinalizeAsync call) - lets
+    // the Done->Production polling loop (docs/015-Deployment.md §4) check this
+    // specific PR's merge status without re-parsing gh/az CLI output every time.
+    public string? PullRequestUrl { get; set; }
     public Guid? WorktreeId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

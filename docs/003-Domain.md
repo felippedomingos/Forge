@@ -50,7 +50,7 @@ The original scope described three actors between `Backlog` and `Todo`: a Planne
 | 7 | `AwaitingPublish` | `Publishing` | `UserRequestedPublish` | User (moves card to Publish) | None beyond the human decision (UC-10) |
 | 8 | `Publishing` | `Review` | `DeployCompleted` | Deploy agent | Publish steps (code, DB, other local changes) succeeded |
 | 9 | `Review` | `Done` | `UserApprovedReview` | User | None beyond the human decision |
-| 10 | `Done` | `Production` | `PipelineConfirmedDeployment` | External CI/CD (webhook) | Pipeline reports success |
+| 10 | `Done` | `Production` | `PipelineConfirmedDeployment` | External CI/CD (webhook) or `TaskWorkflow`'s own PR-merge polling ([[015-Deployment]] §4) | Pipeline reports success, or the task's own `PullRequestUrl` is detected merged |
 
 ### Not yet specified (deferred to [[004-Workflow]])
 
@@ -66,7 +66,9 @@ The happy path above is fully determined by the founder's original spec. What's 
 
 Each row is an `Event.type` value. This list will grow; it is not meant to be exhaustive on first pass.
 
-`TaskCreated`, `PlannerStarted`, `PlannerInvokingModel`, `PlannerCompleted`, `PlannerNeedsClarification`, `UserAnsweredQuestions`, `PrioritizationCompleted`, `TaskPromotedToTodo`, `WorkerAllocated`, `DeveloperStarted`, `DeveloperCompleted`, `DeveloperFailed`, `UserRequestedPublish`, `DeployStarted`, `DeployCompleted`, `DeployFailed`, `UserApprovedReview`, `GitCommitted`, `GitPushed`, `PRCreated`, `WorktreeDeleted`, `PipelineConfirmedDeployment`.
+`TaskCreated`, `PlannerStarted`, `PlannerInvokingModel`, `PlannerCompleted`, `PlannerNeedsClarification`, `UserAnsweredQuestions`, `PrioritizationCompleted`, `TaskPromotedToTodo`, `WorkerAllocated`, `DeveloperStarted`, `DeveloperCompleted`, `DeveloperFailed`, `UserRequestedPublish`, `DeployStarted`, `DeployMigrationCompleted`, `DeployRestartCompleted`, `DeployHealthCheckPassed`, `DeployCompleted`, `DeployFailed`, `UserApprovedReview`, `ReviewRequestedChanges`, `GitCommitted`, `GitPushed`, `PRCreated`, `WorktreeDeleted`, `PipelineConfirmedDeployment`.
+
+`DeployMigrationCompleted`/`DeployRestartCompleted`/`DeployHealthCheckPassed` were added once `DeployAsync` actually ran all three `PublishRecipe` steps ([[015-Deployment]] §2-3) instead of just `migrationCommand` — each step gets its own event so the timeline shows which part of the recipe succeeded, not just a single opaque `DeployCompleted`. `ReviewRequestedChanges` backs row 14 ([[004-Workflow]] §3a) — carries the reviewer's comment as payload, read by the next `DevelopAsync` run.
 
 `PlannerInvokingModel` was added once the Planner agent became real ([[ADR-0005]]) - it's the one event type that exists purely to give the task detail view ([[013-Frontend]]) something to show while a real LLM call is in flight, rather than a silent gap between `PlannerStarted` and `PlannerCompleted`.
 

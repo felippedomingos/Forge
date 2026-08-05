@@ -160,6 +160,13 @@ app.MapGet("/auth/needs-bootstrap", async (ForgeDbContext db) =>
     Results.Ok(new { needsBootstrap = !await db.Users.AnyAsync() })
 ).AllowAnonymous();
 
+// docs/015-Deployment.md §3 - a PublishRecipe's healthCheckUrl needs an endpoint that
+// doesn't require a JWT (found live: adding global default-deny auth, ADR-0006, meant
+// any healthCheckUrl pointing at Forge's own API would otherwise always read as
+// unhealthy - 401, not 200). Deliberately tells nothing about the system beyond "the
+// API process is up and answering requests."
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).AllowAnonymous();
+
 app.MapPost("/auth/login", async (ForgeDbContext db, LoginRequest request) =>
 {
     var user = await db.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
@@ -484,7 +491,7 @@ app.Map("/ws/tasks/{id:guid}", async (HttpContext context, Guid id, TaskEventBro
     }
 });
 
-app.MapPost("/tasks/{id:guid}/answers", async (ForgeDbContext db, TemporalClient temporal, Guid id, AnswerQuestionsRequest request) =>
+app.MapPost("/tasks/{id:guid}/answers", async (ForgeDbContext db, TemporalClient temporal, ClaimsPrincipal principal, Guid id, AnswerQuestionsRequest request) =>
 {
     // docs/012-API.md §2: answers are meaningful data, recorded before the signal that
     // just tells the workflow "an answer arrived" - the workflow itself holds no
@@ -496,13 +503,37 @@ app.MapPost("/tasks/{id:guid}/answers", async (ForgeDbContext db, TemporalClient
         Type = "UserAnsweredQuestions",
         Payload = System.Text.Json.JsonSerializer.Serialize(new { request.Answers }),
         OccurredAt = DateTimeOffset.UtcNow,
-        Actor = "user:unknown", // docs/014-Security.md: no auth model yet to attribute a real user
+        // docs/014-Security.md §6 - now attributable, since AuthN exists (ADR-0006).
+        Actor = $"user:{principal.FindFirstValue(ClaimTypes.NameIdentifier)}",
     });
     await db.SaveChangesAsync();
     await PostgresNotify.TaskChangedAsync(db, id);
 
     var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
     await handle.SignalAsync(wf => wf.AnswerQuestionsAsync());
+    return Results.Ok();
+});
+
+// docs/004-Workflow.md row 14 (new, founder-requested): a reviewer sends a task back
+// to Todo/Executing for another Developer pass instead of only approving it. The
+// comment is recorded as an Event (same pattern as UserAnsweredQuestions above) - the
+// workflow signal itself carries no payload, DevelopAsync reads the event directly.
+app.MapPost("/tasks/{id:guid}/request-changes", async (ForgeDbContext db, TemporalClient temporal, ClaimsPrincipal principal, Guid id, RequestChangesRequest request) =>
+{
+    db.Events.Add(new DomainEvent
+    {
+        Id = Guid.NewGuid(),
+        TaskId = id,
+        Type = "ReviewRequestedChanges",
+        Payload = System.Text.Json.JsonSerializer.Serialize(new { request.Comment }),
+        OccurredAt = DateTimeOffset.UtcNow,
+        Actor = $"user:{principal.FindFirstValue(ClaimTypes.NameIdentifier)}",
+    });
+    await db.SaveChangesAsync();
+    await PostgresNotify.TaskChangedAsync(db, id);
+
+    var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
+    await handle.SignalAsync(wf => wf.RequestChangesAsync());
     return Results.Ok();
 });
 
@@ -561,6 +592,32 @@ app.MapPost("/tasks/{id:guid}/resume", async (ForgeDbContext db, TemporalClient 
     return Results.Ok();
 });
 
+// docs/006-Scheduler.md - the same "resume a workflow that isn't there anymore"
+// recovery as /tasks/{id}/resume, but for a Project's BacklogSchedulerWorkflow.
+// Found and needed live: a project's scheduler ran ~19h at the 5s poll interval and
+// hit Temporal's history size limit, terminated by the server before this
+// workflow's own Workflow.ContinueAsNewSuggested fix existed to prevent it. Same
+// WorkflowIdReusePolicy protection as the task version - can't accidentally
+// double-start over a scheduler that's still running.
+app.MapPost("/projects/{id:guid}/resume-scheduler", async (ForgeDbContext db, TemporalClient temporal, Guid id) =>
+{
+    var project = await db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id);
+    if (project is null) return Results.NotFound();
+
+    try
+    {
+        await temporal.StartWorkflowAsync(
+            (BacklogSchedulerWorkflow wf) => wf.RunAsync(project.Id),
+            new WorkflowOptions($"scheduler-{project.Id}", TaskQueue));
+    }
+    catch (Temporalio.Exceptions.WorkflowAlreadyStartedException)
+    {
+        return Results.Conflict(new { error = "This project's scheduler is already running - nothing to resume." });
+    }
+
+    return Results.Ok();
+});
+
 app.MapPost("/tasks/{id:guid}/move", async (TemporalClient temporal, Guid id, MoveTaskRequest request) =>
 {
     var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
@@ -594,6 +651,7 @@ record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBra
 // was here first, then replaces it with its own synthesized result.
 record CreateTaskRequest(Guid ProjectId, string Title, string? Description);
 record AnswerQuestionsRequest(List<string> Answers);
+record RequestChangesRequest(string Comment);
 record MoveTaskRequest(TaskState TargetState);
 // docs/015-Deployment.md §2 - matches AgentActivities.PublishRecipeDto's shape exactly.
 record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTargets, string? HealthCheckUrl, string? PreviewUrl);

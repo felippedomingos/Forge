@@ -111,6 +111,9 @@ export interface TaskItem {
   state: TaskState
   priority: number | null
   branchName: string | null
+  // Set once the Git agent actually creates the PR (Review->Done) - docs/003-Domain.md
+  // row 9->10, docs/015-Deployment.md §4's Done->Production polling reads this.
+  pullRequestUrl: string | null
   worktreeId: string | null
   createdAt: string
   updatedAt: string
@@ -216,6 +219,13 @@ export const api = {
     request<void>(`/tasks/${taskId}/answers`, {
       method: 'POST',
       body: JSON.stringify({ answers }),
+    }),
+  // docs/004-Workflow.md row 14 - founder-requested: send a Review-stage task back for
+  // another Developer pass instead of only approving it forward.
+  requestChanges: (taskId: string, comment: string) =>
+    request<void>(`/tasks/${taskId}/request-changes`, {
+      method: 'POST',
+      body: JSON.stringify({ comment }),
     }),
   getTask: (taskId: string) => request<TaskItem>(`/tasks/${taskId}`),
   // docs/000-Vision.md UC-9 - the task detail view's event timeline. Polling stands in

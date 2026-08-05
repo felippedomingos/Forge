@@ -12,6 +12,8 @@ There is no separate scheduler service in this architecture. Given Temporal alre
 
 This reuses Temporal's own primitives (signals for "a worker freed up", "a new task entered Backlog", "priorities changed") instead of a bespoke polling loop — consistent with [[002-Architecture]] §2's stance that event-driven orchestration is what Temporal provides natively, not a layer built on top of it.
 
+**What's actually implemented today is a fixed 5-second poll loop**, not the event-driven design above — a documented, deliberate stand-in ([[BacklogSchedulerWorkflow]]'s own "KNOWN SIMPLIFICATION" comment), not yet the target design. **Found live, and now fixed**: a real long-lived project's scheduler ran for ~19 hours at that interval and hit Temporal's history size limit (51,200 events), which the server responded to by terminating the workflow outright - `docs/016-Roadmap.md`'s "no `ContinueAsNewAsync` yet" caveat wasn't hypothetical. Fixed by checking `Workflow.ContinueAsNewSuggested` once per loop iteration and continuing-as-new when the server recommends it, rather than guessing at a fixed iteration count that would be right for one poll interval and wrong for another. `POST /projects/{id}/resume-scheduler` ([[012-API]]) exists to recover a scheduler that terminates anyway (this fix, a bug, or anything else) without losing the project's scheduling state - the same recovery shape as `POST /tasks/{id}/resume`.
+
 ## 2. Concurrency Limits
 
 Three independent caps, all configurable per Project/globally, not hardcoded:

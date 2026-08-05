@@ -15,7 +15,13 @@ public class TaskWorkflow
     private bool _promoted;
     private bool _publishRequested;
     private bool _reviewApproved;
+    private bool _changesRequested;
     private bool _productionConfirmed;
+
+    // docs/015-Deployment.md §4 - how often to poll the PR's merge status once a task
+    // reaches Done. A field (not a literal in RunAsync) purely so a test/override can
+    // shrink it - the value itself was never meant to be tunable per-task.
+    private static readonly TimeSpan ProductionPollInterval = TimeSpan.FromSeconds(60);
 
     [WorkflowQuery]
     public TaskState State => _state;
@@ -119,38 +125,90 @@ public class TaskWorkflow
             break;
         }
 
-        await SetStateAsync(taskId, TaskState.AwaitingPublish);
-
-        // docs/004-Workflow.md §5: a failed deploy bounces back to AwaitingPublish, no
-        // auto-retry - the human decides whether/when to press Publish again.
-        DeployResult deploy;
-        do
+        // docs/004-Workflow.md row 14 (founder-requested, new): Review can now send a
+        // task back for another Developer pass instead of only approving it forward.
+        // This outer loop is what makes that possible without re-running the Planner -
+        // AwaitingPublish/Publishing/Deploy/Review repeat, but the plan itself
+        // (Task.Description/AcceptanceCriteria) is never touched again.
+        while (true)
         {
-            await Workflow.WaitConditionAsync(() => _publishRequested);
-            _publishRequested = false;
-            await SetStateAsync(taskId, TaskState.Publishing);
+            await SetStateAsync(taskId, TaskState.AwaitingPublish);
 
-            deploy = await Workflow.ExecuteActivityAsync(
-                () => AgentActivities.DeployAsync(taskId),
-                DeployActivityOptions);
-
-            if (!deploy.Success)
+            // docs/004-Workflow.md §5: a failed deploy bounces back to AwaitingPublish,
+            // no auto-retry - the human decides whether/when to press Publish again.
+            DeployResult deploy;
+            do
             {
-                await SetStateAsync(taskId, TaskState.AwaitingPublish);
+                await Workflow.WaitConditionAsync(() => _publishRequested);
+                _publishRequested = false;
+                await SetStateAsync(taskId, TaskState.Publishing);
+
+                deploy = await Workflow.ExecuteActivityAsync(
+                    () => AgentActivities.DeployAsync(taskId),
+                    DeployActivityOptions);
+
+                if (!deploy.Success)
+                {
+                    await SetStateAsync(taskId, TaskState.AwaitingPublish);
+                }
+            } while (!deploy.Success);
+
+            await SetStateAsync(taskId, TaskState.Review);
+            await Workflow.WaitConditionAsync(() => _reviewApproved || _changesRequested);
+
+            if (!_changesRequested)
+            {
+                break; // _reviewApproved - the only way out to Done
             }
-        } while (!deploy.Success);
 
-        await SetStateAsync(taskId, TaskState.Review);
+            _changesRequested = false;
+            await SetStateAsync(taskId, TaskState.Todo);
 
-        await Workflow.WaitConditionAsync(() => _reviewApproved);
+            // A rework pass can itself hit a genuine question (same as the first
+            // Developer attempt) - resolve it here without unwinding all the way back
+            // to the outer Planner loop, since re-planning was never the problem.
+            while (true)
+            {
+                await SetStateAsync(taskId, TaskState.Executing);
+                var redev = await Workflow.ExecuteActivityAsync(
+                    () => AgentActivities.DevelopAsync(taskId),
+                    DefaultActivityOptions);
+
+                if (redev.NeedsClarification)
+                {
+                    await SetStateAsync(taskId, TaskState.Blocked);
+                    await Workflow.WaitConditionAsync(() => _answered);
+                    _answered = false;
+                    continue;
+                }
+
+                break;
+            }
+            // back to AwaitingPublish for another Publish/Deploy/Review cycle
+        }
+
         await SetStateAsync(taskId, TaskState.Done);
 
         await Workflow.ExecuteActivityAsync(
             () => AgentActivities.GitFinalizeAsync(taskId),
             DefaultActivityOptions);
 
-        // docs/003-Domain.md row 10 - external CI/CD confirms, not a human or an agent.
-        await Workflow.WaitConditionAsync(() => _productionConfirmed);
+        // docs/003-Domain.md row 10 / docs/015-Deployment.md §4 (resolved): poll the
+        // PR's own merge status directly instead of waiting on an undesigned webhook.
+        // The manual ConfirmProductionAsync signal still works too (e.g. a project
+        // without a PullRequestUrl captured, or a provider this polling doesn't cover).
+        while (!_productionConfirmed)
+        {
+            var merged = await Workflow.ExecuteActivityAsync(
+                () => AgentActivities.CheckPullRequestMergedAsync(taskId),
+                DefaultActivityOptions);
+            if (merged)
+            {
+                _productionConfirmed = true;
+                break;
+            }
+            await Workflow.WaitConditionAsync(() => _productionConfirmed, ProductionPollInterval);
+        }
         await SetStateAsync(taskId, TaskState.Production);
     }
 
@@ -194,12 +252,24 @@ public class TaskWorkflow
         return Task.CompletedTask;
     }
 
-    // docs/003-Domain.md row 10 (PipelineConfirmedDeployment) - sent by whatever
-    // integration watches the external CI/CD pipeline, not implemented yet.
+    // docs/003-Domain.md row 10 (PipelineConfirmedDeployment) - kept as a manual
+    // escape hatch even though RunAsync's own polling loop (docs/015-Deployment.md §4)
+    // now detects this automatically for the common case.
     [WorkflowSignal]
     public Task ConfirmProductionAsync()
     {
         if (_state == TaskState.Done) _productionConfirmed = true;
+        return Task.CompletedTask;
+    }
+
+    // docs/004-Workflow.md row 14 (new, founder-requested): the reviewer's comment
+    // itself isn't carried by the signal - Forge.Api records it as a
+    // "ReviewRequestedChanges" event before signaling, same pattern as
+    // AnswerQuestionsAsync above.
+    [WorkflowSignal]
+    public Task RequestChangesAsync()
+    {
+        if (_state == TaskState.Review) _changesRequested = true;
         return Task.CompletedTask;
     }
 }

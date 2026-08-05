@@ -14,8 +14,14 @@ namespace Forge.Workflows;
 // KNOWN SIMPLIFICATION: re-evaluates on a fixed timer rather than being woken by real
 // events (a task entering Backlog, another task leaving Executing) - docs/002-Architecture
 // §2 prefers event-driven over polling, so this is a deliberate stand-in, not the target
-// design. It also never calls Workflow.ContinueAsNewAsync, so its history grows
-// unbounded for a long-lived project - fine for a skeleton, wrong for production.
+// design.
+//
+// Found live: this workflow ran for ~19h at the 5s poll interval and hit Temporal's
+// history size limit, terminated by the server (51,200 events - docs/006-Scheduler.md
+// didn't have a real long-lived project to prove this against until now). Fixed below
+// via Workflow.ContinueAsNewSuggested - the server-recommended signal for exactly this,
+// rather than guessing at an iteration count that's right for one poll interval and
+// wrong for another.
 [Workflow]
 public class BacklogSchedulerWorkflow
 {
@@ -51,6 +57,14 @@ public class BacklogSchedulerWorkflow
     {
         while (true)
         {
+            // Checked once per iteration, right where a continue-as-new is cheapest -
+            // no in-flight activity, nothing to lose by restarting history here.
+            if (Workflow.ContinueAsNewSuggested)
+            {
+                throw Workflow.CreateContinueAsNewException(
+                    (BacklogSchedulerWorkflow wf) => wf.RunAsync(projectId));
+            }
+
             var snapshot = await Workflow.ExecuteActivityAsync(
                 () => SchedulingActivities.GetSchedulingSnapshotAsync(projectId),
                 SnapshotActivityOptions);
