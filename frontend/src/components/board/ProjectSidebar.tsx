@@ -9,6 +9,8 @@ import { api, type Project } from '@/lib/api'
 import { logout, type AuthUser } from '@/lib/auth'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { CreateProjectDialog } from './CreateProjectDialog'
+import { UsersDialog } from './UsersDialog'
+import { ChangePasswordDialog } from './ChangePasswordDialog'
 
 // Founder-requested: a left-hand "Projetos" nav (repo + shared memory live per-project,
 // so navigating by project - not just filtering a dropdown - is the natural shape) plus
@@ -125,6 +127,12 @@ export function ProjectSidebar({
           {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
           {theme === 'dark' ? 'Light mode' : 'Dark mode'}
         </Button>
+
+        {/* Admin-only account management (ADR-0006's `Role == "Admin"` check, mirrored
+            here so the entry point isn't shown to someone who'd just get a 403). */}
+        {user.role === 'Admin' && <UsersDialog />}
+
+        <ChangePasswordDialog />
 
         <div className="flex items-center justify-between gap-1.5 px-2 py-1">
           <span className="min-w-0 truncate text-xs text-muted-foreground" title={user.email}>
