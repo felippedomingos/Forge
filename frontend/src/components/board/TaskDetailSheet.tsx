@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, DollarSign, ExternalLink } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, DollarSign, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Sheet,
@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { STATE_CONFIG } from '@/lib/state-config'
 import { api, parsePublishRecipe } from '@/lib/api'
 import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
+import { RunSessionTranscript } from './RunSessionTranscript'
 
 // docs/000-Vision.md UC-9: click a task, see what it does and how the agent is
 // working right now if it's in progress. The WebSocket (docs/007-ExecutionEngine.md
@@ -28,6 +29,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   const queryClient = useQueryClient()
   const [answerText, setAnswerText] = useState('')
   const [changesComment, setChangesComment] = useState('')
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null)
 
   const taskQuery = useQuery({
     queryKey: ['task', taskId],
@@ -269,14 +271,31 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
                       Agent runs
                     </h3>
                     <ul className="flex flex-col gap-1 text-[11px] text-muted-foreground">
-                      {task.runs!.map((r) => (
-                        <li key={r.id} className="flex justify-between">
-                          <span>{r.agentRole}</span>
-                          <span>
-                            ${r.costEstimate.toFixed(4)} · {r.promptTokens + r.completionTokens} tok
-                          </span>
-                        </li>
-                      ))}
+                      {task.runs!.map((r) => {
+                        const isExpanded = expandedRunId === r.id
+                        return (
+                          <li key={r.id} className="flex flex-col">
+                            <button
+                              type="button"
+                              className="flex items-center justify-between gap-2 rounded px-1 py-0.5 text-left hover:bg-muted/50"
+                              onClick={() => setExpandedRunId(isExpanded ? null : r.id)}
+                            >
+                              <span className="flex items-center gap-1">
+                                {isExpanded ? (
+                                  <ChevronDown className="size-3 shrink-0" />
+                                ) : (
+                                  <ChevronRight className="size-3 shrink-0" />
+                                )}
+                                {r.agentRole}
+                              </span>
+                              <span>
+                                ${r.costEstimate.toFixed(4)} · {r.promptTokens + r.completionTokens} tok
+                              </span>
+                            </button>
+                            {isExpanded && taskId && <RunSessionTranscript taskId={taskId} runId={r.id} />}
+                          </li>
+                        )
+                      })}
                     </ul>
                     <p className="mt-2 text-right text-xs font-medium">
                       Total: ${totalCost.toFixed(4)}

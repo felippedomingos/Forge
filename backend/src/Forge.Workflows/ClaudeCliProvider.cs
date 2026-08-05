@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Forge.Workflows;
 
-public record ClaudeCliResult(string Text, decimal CostUsd, int InputTokens, int OutputTokens);
+public record ClaudeCliResult(string Text, decimal CostUsd, int InputTokens, int OutputTokens, string? SessionId);
 
 // docs/008-ModelRouter.md §1, docs/adr/ADR-0005-claude-code-cli-as-invocation-mechanism.md
 // - the one Provider implementation at v1. Wraps the Claude Code CLI as a subprocess,
@@ -73,8 +73,9 @@ public static class ClaudeCliProvider
         var usage = root.GetProperty("usage");
         var inputTokens = usage.GetProperty("input_tokens").GetInt32();
         var outputTokens = usage.GetProperty("output_tokens").GetInt32();
+        var sessionId = root.TryGetProperty("session_id", out var sessionIdProp) ? sessionIdProp.GetString() : null;
 
-        return new ClaudeCliResult(text, cost, inputTokens, outputTokens);
+        return new ClaudeCliResult(text, cost, inputTokens, outputTokens, sessionId);
     }
 
     // Agents are instructed to respond with pure JSON but occasionally wrap it in

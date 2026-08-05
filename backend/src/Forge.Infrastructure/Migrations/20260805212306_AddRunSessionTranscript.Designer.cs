@@ -3,6 +3,7 @@ using System;
 using Forge.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Forge.Infrastructure.Migrations
 {
     [DbContext(typeof(ForgeDbContext))]
-    partial class ForgeDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260805212306_AddRunSessionTranscript")]
+    partial class AddRunSessionTranscript
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
