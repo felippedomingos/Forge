@@ -246,4 +246,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name, email, role, password }),
     }),
+  updateUser: (userId: string, patch: { name?: string; email?: string; role?: string }) =>
+    request<{ id: string; name: string; email: string; role: string }>(`/users/${userId}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  // Self-service only - proves the current password via BCrypt server-side before
+  // replacing the hash. No Admin-driven reset endpoint exists (ADR-0006's noted gap).
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>('/users/me/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 }

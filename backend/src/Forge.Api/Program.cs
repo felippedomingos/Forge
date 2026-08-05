@@ -200,6 +200,44 @@ app.MapGet("/users", async (ForgeDbContext db, ClaimsPrincipal principal) =>
     return Results.Ok(users);
 });
 
+// Admin-only, same check as POST/GET /users above - edits an existing account's
+// name/email/role. Partial update (only non-null fields change), matching PATCH
+// /projects/{id}'s own convention even though this is a PUT (no password field here -
+// that's the separate self-service /users/me/change-password endpoint below, which is
+// the only way a PasswordHash ever changes post-creation).
+app.MapPut("/users/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id, UpdateUserRequest request) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var user = await db.Users.FindAsync(id);
+    if (user is null) return Results.NotFound();
+
+    if (request.Name is not null) user.Name = request.Name;
+    if (request.Email is not null) user.Email = request.Email;
+    if (request.Role is not null) user.Role = request.Role;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new { user.Id, user.Name, user.Email, user.Role });
+});
+
+// docs/adr/ADR-0006's noted gap ("no password reset flow exists yet") - this is the
+// self-service half of it: any authenticated user can change their own password by
+// proving they know the current one (BCrypt.Verify), no Admin action needed. Admin-driven
+// reset for a forgotten password is still out of scope (unchanged from the ADR).
+app.MapPost("/users/me/change-password", async (ForgeDbContext db, ClaimsPrincipal principal, ChangePasswordRequest request) =>
+{
+    var subClaim = principal.FindFirstValue(ClaimTypes.NameIdentifier) ?? principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+    var user = await db.Users.FindAsync(Guid.Parse(subClaim!));
+    if (user is null) return Results.NotFound();
+
+    if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+        return Results.Unauthorized();
+
+    user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+    await db.SaveChangesAsync();
+    return Results.Ok();
+});
+
 // docs/012-API.md §2 - the endpoints below are the first slice, not the full v1 surface yet.
 
 app.MapGet("/projects", async (ForgeDbContext db) =>
@@ -606,3 +644,5 @@ record MemoryEntryRequest(string Key, string Value);
 record BootstrapRequest(string Name, string Email, string Password);
 record LoginRequest(string Email, string Password);
 record CreateUserRequest(string Name, string Email, string Role, string Password);
+record UpdateUserRequest(string? Name, string? Email, string? Role);
+record ChangePasswordRequest(string CurrentPassword, string NewPassword);
