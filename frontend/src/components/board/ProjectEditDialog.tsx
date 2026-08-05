@@ -26,10 +26,14 @@ export function ProjectEditDialog({
   project,
   open,
   onOpenChange,
+  onDeleted,
 }: {
   project: Project
   open: boolean
   onOpenChange: (open: boolean) => void
+  // Called after a successful delete, in addition to onOpenChange(false) - lets the
+  // sidebar reset its selected-project filter if this was the one showing.
+  onDeleted?: () => void
 }) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(project.name)
@@ -39,6 +43,7 @@ export function ProjectEditDialog({
   const [previewUrl, setPreviewUrl] = useState(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -47,6 +52,7 @@ export function ProjectEditDialog({
     setRootBranch(project.rootBranch)
     setLocalPath(project.localPath ?? '')
     setPreviewUrl(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
+    setConfirmingDelete(false)
   }, [open, project])
 
   const memoryQuery = useQuery({
@@ -100,6 +106,25 @@ export function ProjectEditDialog({
     mutationFn: (key: string) => api.deleteMemoryEntry(project.id, key),
     onSuccess: invalidate,
     onError: () => toast.error('Could not delete the memory entry.'),
+  })
+
+  // Cascades on the backend (tasks, runs, events, memory, ...) and best-effort
+  // terminates the project's Temporal workflows - see the DELETE /projects/{id}
+  // endpoint's own comment. Irreversible, so this button requires a second click
+  // ("Confirmar exclusão") rather than firing on the first.
+  const deleteProject = useMutation({
+    mutationFn: () => api.deleteProject(project.id),
+    onSuccess: () => {
+      toast.success(`"${project.name}" deleted.`)
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      onOpenChange(false)
+      onDeleted?.()
+    },
+    onError: () => {
+      toast.error('Could not delete the project.')
+      setConfirmingDelete(false)
+    },
   })
 
   const memory = memoryQuery.data ?? []
@@ -224,6 +249,25 @@ export function ProjectEditDialog({
               onClick={() => saveMemoryEntry.mutate()}
             >
               Add memory entry
+            </Button>
+          </div>
+
+          <Separator />
+
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-destructive">Danger zone</Label>
+            <p className="text-xs text-muted-foreground">
+              Deletes the project and every task, run, event and memory entry under it.
+              Cannot be undone.
+            </p>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="w-fit"
+              disabled={deleteProject.isPending}
+              onClick={() => (confirmingDelete ? deleteProject.mutate() : setConfirmingDelete(true))}
+            >
+              {confirmingDelete ? 'Confirmar exclusão — clique novamente' : 'Delete project'}
             </Button>
           </div>
         </div>

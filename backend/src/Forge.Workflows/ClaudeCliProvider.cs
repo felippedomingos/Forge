@@ -19,7 +19,13 @@ public static class ClaudeCliProvider
     // (felippedomingos/forge-test-sandbox) is disposable and isolated - a real project
     // would need docs/009-MCP.md §4's per-role tool scoping instead of a blanket
     // bypass, which is not implemented yet (docs/014-Security.md §4 gap).
-    public static async Task<ClaudeCliResult> InvokeAsync(string prompt, string workingDirectory, bool bypassPermissions = false, CancellationToken ct = default)
+    // allowedTools: pre-approves specific tools without granting bypassPermissions'
+    // blanket access - e.g. the Planner (docs/005-Agents.md §2) needs WebFetch to
+    // follow a link a human put in a task's description, but should stay read-only
+    // otherwise. Additive to whatever's already auto-allowed in headless -p mode
+    // (Read/Glob/Grep already work today with no flags at all); irrelevant when
+    // bypassPermissions is set, since that already allows everything.
+    public static async Task<ClaudeCliResult> InvokeAsync(string prompt, string workingDirectory, bool bypassPermissions = false, IReadOnlyList<string>? allowedTools = null, CancellationToken ct = default)
     {
         var psi = new ProcessStartInfo
         {
@@ -37,6 +43,11 @@ public static class ClaudeCliProvider
         {
             psi.ArgumentList.Add("--permission-mode");
             psi.ArgumentList.Add("bypassPermissions");
+        }
+        else if (allowedTools is { Count: > 0 })
+        {
+            psi.ArgumentList.Add("--allowedTools");
+            foreach (var tool in allowedTools) psi.ArgumentList.Add(tool);
         }
 
         using var process = Process.Start(psi)

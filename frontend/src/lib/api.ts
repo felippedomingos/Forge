@@ -49,6 +49,15 @@ export function parsePublishRecipe(raw: string | null): PublishRecipe | null {
   }
 }
 
+// docs/010-Plugins.md - GitHub today per ADR-0002; the new-project dialog picks from
+// whatever's actually registered rather than a hardcoded GUID.
+export interface Plugin {
+  id: string
+  name: string
+  kind: string
+  version: string
+}
+
 // docs/005-Agents.md §7 - project-wide shared memory, read by every agent role
 // regardless of which role wrote a given entry.
 export interface MemoryEntry {
@@ -118,7 +127,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listProjects: () => request<Project[]>('/projects'),
+  listPlugins: () => request<Plugin[]>('/plugins'),
   getProject: (projectId: string) => request<Project>(`/projects/${projectId}`),
+  createProject: (input: {
+    name: string
+    prefix: string
+    repositoryUrl: string
+    rootBranch: string
+    gitProviderPluginId: string
+    localPath?: string
+  }) =>
+    request<Project>('/projects', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   updateProject: (
     projectId: string,
     patch: Partial<Pick<Project, 'name' | 'repositoryUrl' | 'rootBranch' | 'localPath'>>,
@@ -135,6 +157,7 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(recipe),
     }),
+  deleteProject: (projectId: string) => request<void>(`/projects/${projectId}`, { method: 'DELETE' }),
   getProjectMemory: (projectId: string) => request<MemoryEntry[]>(`/projects/${projectId}/memory`),
   setMemoryEntry: (projectId: string, key: string, value: string) =>
     request<void>(`/projects/${projectId}/memory`, {
@@ -147,10 +170,10 @@ export const api = {
     }),
   listTasks: (projectId?: string) =>
     request<TaskItem[]>(`/tasks${projectId ? `?projectId=${projectId}` : ''}`),
-  createTask: (projectId: string, title: string) =>
+  createTask: (projectId: string, title: string, description?: string) =>
     request<TaskItem>('/tasks', {
       method: 'POST',
-      body: JSON.stringify({ projectId, title }),
+      body: JSON.stringify({ projectId, title, description: description || null }),
     }),
   // docs/006-Scheduler.md §1: stand-in for the BacklogSchedulerWorkflow, which doesn't
   // exist yet - manually promotes one task instead of priority-ordered auto-promotion.
@@ -173,4 +196,8 @@ export const api = {
   // for the WebSocket channel docs/007-ExecutionEngine.md §4 still describes as the
   // target mechanism.
   getTaskEvents: (taskId: string) => request<TaskEvent[]>(`/tasks/${taskId}/events`),
+  // docs/013-Frontend.md - founder-requested global spend indicator. NOT a real
+  // account-level quota (see the backend endpoint's own comment) - a sum of
+  // per-run CostEstimate, itself an API-list-price estimate, across every project.
+  getGlobalCost: () => request<{ totalCostUsd: number; runCount: number }>('/cost'),
 }

@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon, DollarSign } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/useTheme'
+import { api, type Project } from '@/lib/api'
 import { ProjectEditDialog } from './ProjectEditDialog'
-import type { Project } from '@/lib/api'
+import { CreateProjectDialog } from './CreateProjectDialog'
 
 // Founder-requested: a left-hand "Projetos" nav (repo + shared memory live per-project,
 // so navigating by project - not just filtering a dropdown - is the natural shape) plus
@@ -25,6 +27,14 @@ export function ProjectSidebar({
 }) {
   const { theme, toggleTheme } = useTheme()
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
+  // Founder-requested: a global spend indicator. Polls rather than reacting to the
+  // WebSocket (docs/007-ExecutionEngine.md §4 is per-task, not board-wide) - 15s is
+  // frequent enough for a figure that only moves when a Run completes.
+  const costQuery = useQuery({
+    queryKey: ['global-cost'],
+    queryFn: api.getGlobalCost,
+    refetchInterval: 15000,
+  })
   // Looked up fresh from `projects` every render (rather than snapshotting the Project
   // object on click) so the dialog's title/fields stay in sync after a save re-fetches
   // the projects list.
@@ -54,9 +64,12 @@ export function ProjectSidebar({
       </button>
 
       <div className="flex flex-col gap-0.5">
-        <p className="px-2 py-1 text-[10px] font-medium tracking-wide text-muted-foreground/70 uppercase">
-          Projects
-        </p>
+        <div className="flex items-center justify-between px-2 py-1">
+          <p className="text-[10px] font-medium tracking-wide text-muted-foreground/70 uppercase">
+            Projects
+          </p>
+          <CreateProjectDialog />
+        </div>
         {projects.map((project) => (
           <div
             key={project.id}
@@ -91,21 +104,34 @@ export function ProjectSidebar({
         )}
       </div>
 
-      <Button
-        variant="ghost"
-        size="sm"
-        className="mt-auto w-fit gap-1.5 text-muted-foreground"
-        onClick={toggleTheme}
-      >
-        {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
-        {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-      </Button>
+      <div className="mt-auto flex flex-col gap-1.5">
+        {/* Founder-requested: a visible sense of spend, not just per-task. See
+            api.getGlobalCost's own comment for why this is an estimate, not a real
+            account-level quota. */}
+        <div
+          className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted-foreground"
+          title="Estimated spend across every project (API list-price estimate, not real subscription usage - docs/015-Deployment.md)"
+        >
+          <DollarSign className="size-3.5 shrink-0" />
+          <span>
+            {costQuery.data ? `$${costQuery.data.totalCostUsd.toFixed(2)} spent` : '—'}
+          </span>
+        </div>
+
+        <Button variant="ghost" size="sm" className="w-fit gap-1.5 text-muted-foreground" onClick={toggleTheme}>
+          {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+          {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+        </Button>
+      </div>
 
       {editingProject && (
         <ProjectEditDialog
           project={editingProject}
           open={Boolean(editingProject)}
           onOpenChange={(open) => !open && setEditingProjectId(null)}
+          onDeleted={() => {
+            if (selectedProjectId === editingProject.id) onSelectProject('all')
+          }}
         />
       )}
     </nav>

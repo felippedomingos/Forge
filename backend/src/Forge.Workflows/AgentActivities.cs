@@ -160,9 +160,26 @@ public static class AgentActivities
             new { message = $"Reading {localPath} and analyzing \"{task.Title}\"..." });
 
         var memory = await FormatMemoryAsync(db, task.ProjectId);
+        // Founder-requested: a task's title is sometimes accompanied by user-provided
+        // notes (set at creation, docs/012-API.md POST /tasks) that may contain a URL -
+        // a spec doc, an issue, a design mock. The Planner is explicitly told to fetch
+        // those (WebFetch is allowed below, scoped narrowly rather than via
+        // bypassPermissions) rather than guessing at what a bare link implies.
+        var seedNotesSection = string.IsNullOrWhiteSpace(task.Description)
+            ? ""
+            : $$"""
+
+                The user also provided these initial notes when creating the task:
+                {{task.Description}}
+
+                If these notes contain a URL, fetch it (you have WebFetch access) before
+                planning - ground your description and acceptance criteria in what that
+                page/doc/issue actually says, not just the link text.
+                """;
         var prompt = $$"""
             You are the Planner agent inside Forge, an AI-native software factory.
-            A task was created with only this title: "{{task.Title}}"
+            A task was created with this title: "{{task.Title}}"
+            {{seedNotesSection}}
 
             Shared project memory (notes accumulated across prior tasks on this
             project - conventions, decisions, gotchas; treat as authoritative context
@@ -172,8 +189,9 @@ public static class AgentActivities
             Investigate the repository in the current working directory to understand
             enough context to plan this task. Then decide one of two things:
 
-            1. If the title is clear enough to act on, produce a short description and
-               a list of 2-5 concrete, verifiable acceptance criteria.
+            1. If the title (and notes, if any) are clear enough to act on, produce a
+               short description and a list of 2-5 concrete, verifiable acceptance
+               criteria.
             2. If it is genuinely ambiguous, or you are missing information only a human
                can provide, list specific clarifying questions instead - do not guess.
 
@@ -182,7 +200,7 @@ public static class AgentActivities
             {"needsClarification": boolean, "description": string or null, "acceptanceCriteria": string array, "questions": string array}
             """;
 
-        var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, localPath);
+        var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, localPath, allowedTools: ["WebFetch"]);
         var parsed = TryParseLlmJson<PlannerLlmResponse>(cliResult.Text);
 
         await RecordRunAsync(db, taskId, AgentRole.Planner, cliResult.CostUsd, cliResult.InputTokens, cliResult.OutputTokens,

@@ -71,6 +71,12 @@ static string WorkflowIdFor(Guid taskId) => $"task-{taskId}";
 app.MapGet("/projects", async (ForgeDbContext db) =>
     await db.Projects.AsNoTracking().ToListAsync());
 
+// docs/012-API.md - closes the "*(Not implemented)*" gap: the new-project dialog
+// ([[013-Frontend]]) needs a real list to pick a git provider plugin from instead of
+// a hardcoded GUID copy-pasted from another project.
+app.MapGet("/plugins", async (ForgeDbContext db) =>
+    await db.Plugins.AsNoTracking().ToListAsync());
+
 app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, CreateProjectRequest request) =>
 {
     var project = new Project
@@ -81,6 +87,7 @@ app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, Crea
         RepositoryUrl = request.RepositoryUrl,
         RootBranch = request.RootBranch,
         GitProviderPluginId = request.GitProviderPluginId,
+        LocalPath = string.IsNullOrWhiteSpace(request.LocalPath) ? null : request.LocalPath,
         CreatedAt = DateTimeOffset.UtcNow
     };
     db.Projects.Add(project);
@@ -114,6 +121,44 @@ app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdatePro
     if (request.LocalPath is not null) project.LocalPath = request.LocalPath;
     await db.SaveChangesAsync();
     return Results.Ok(project);
+});
+
+// Founder-requested (via sidebar delete). Cascades at the DB level (every FK below
+// Project is DeleteBehavior.Cascade - tasks, sub_tasks, acceptance_criteria, runs,
+// events, worktrees, agent_memory) - the harder part is Temporal, which doesn't know
+// the rows underneath its workflows just vanished. Best-effort terminates the
+// project's long-running BacklogSchedulerWorkflow (docs/006-Scheduler.md - it polls
+// every 5s forever and has no way to notice its project is gone) and every task's
+// TaskWorkflow, so deleting a project doesn't leave orphaned executions parked
+// indefinitely. "Best-effort": a workflow already completed/never started is not an
+// error worth failing the delete over.
+app.MapDelete("/projects/{id:guid}", async (ForgeDbContext db, TemporalClient temporal, Guid id) =>
+{
+    var project = await db.Projects.FindAsync(id);
+    if (project is null) return Results.NotFound();
+
+    var taskIds = await db.Tasks.Where(t => t.ProjectId == id).Select(t => t.Id).ToListAsync();
+
+    db.Projects.Remove(project);
+    await db.SaveChangesAsync();
+
+    async Task TryTerminateAsync(string workflowId)
+    {
+        try
+        {
+            await temporal.GetWorkflowHandle(workflowId).TerminateAsync("Project deleted");
+        }
+        catch (Exception)
+        {
+            // Already completed, never started, or otherwise gone - nothing to do.
+        }
+    }
+
+    await TryTerminateAsync($"scheduler-{id}");
+    foreach (var taskId in taskIds)
+        await TryTerminateAsync(WorkflowIdFor(taskId));
+
+    return Results.Ok();
 });
 
 // docs/005-Agents.md §7 - project-wide shared memory (see MemoryEntryRequest's note on
@@ -184,6 +229,7 @@ app.MapPost("/tasks", async (ForgeDbContext db, TemporalClient temporal, CreateT
         ProjectId = request.ProjectId,
         Number = project.NextTaskNumber,
         Title = request.Title,
+        Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description,
         State = TaskState.Inbox,
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow
@@ -224,6 +270,23 @@ app.MapGet("/tasks/{id:guid}/cost", async (ForgeDbContext db, Guid id) =>
         TotalCostUsd = runs.Sum(r => r.CostEstimate),
         TotalPromptTokens = runs.Sum(r => r.PromptTokens),
         TotalCompletionTokens = runs.Sum(r => r.CompletionTokens),
+        RunCount = runs.Count,
+    });
+});
+
+// Global rollup across every project/task - backs the founder-requested spend
+// indicator in the sidebar. NOT a real account-level quota: per docs/adr/ADR-0005,
+// agents run through the Claude Code CLI under interactive subscription auth, which
+// has no API for "usage remaining" - this is CostEstimate summed across every Run,
+// itself an estimate (each run's model-rate x token-count, ClaudeCliProvider) against
+// Anthropic's API list price, not what a subscription actually bills. Best available
+// signal, not a real budget cap.
+app.MapGet("/cost", async (ForgeDbContext db) =>
+{
+    var runs = await db.Runs.AsNoTracking().ToListAsync();
+    return Results.Ok(new
+    {
+        TotalCostUsd = runs.Sum(r => r.CostEstimate),
         RunCount = runs.Count,
     });
 });
@@ -337,9 +400,14 @@ app.Run();
 
 // docs/012-API.md §2 request shapes - kept next to Program.cs at this skeleton stage,
 // move to their own files once the API grows past this first slice.
-record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId);
+record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath);
 record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath);
-record CreateTaskRequest(Guid ProjectId, string Title);
+// Description is optional, user-provided seed context at creation time (may include a
+// link) - distinct from the Planner-authored Task.Description that AgentActivities.
+// PlanAsync overwrites once it finishes (docs/005-Agents.md §2). Not the same field
+// semantically, but stored in the same column: the Planner's prompt is fed whatever
+// was here first, then replaces it with its own synthesized result.
+record CreateTaskRequest(Guid ProjectId, string Title, string? Description);
 record AnswerQuestionsRequest(List<string> Answers);
 record MoveTaskRequest(TaskState TargetState);
 // docs/015-Deployment.md §2 - matches AgentActivities.PublishRecipeDto's shape exactly.
