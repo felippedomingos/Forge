@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — updated as of the overnight autonomous build session, 2026-08-05
+Draft — updated 2026-08-05, after the project CRUD / drag-and-drop / Azure DevOps pass
 
 ## MVP
 
@@ -19,17 +19,22 @@ Draft — updated as of the overnight autonomous build session, 2026-08-05
 - [x] **Deploy agent — real implementation.** Executes `Project.PublishRecipe.migrationCommand` inside the task's Worktree. Validated live including the failure path (a mismatched recipe failed with a real traceback, correctly stayed at `AwaitingPublish`; fixed recipe then succeeded, second real PR opened).
 - [x] **Prioritizer agent — real implementation.** Was dead code (never invoked) until this pass — `BacklogSchedulerWorkflow` now calls it whenever unprioritized Backlog tasks exist, project-scoped, same `ClaudeCliProvider` mechanism as the other roles.
 - [x] **All 5 docs/005-Agents.md roles are real, not stubs.** Nothing left pretending.
-- [ ] WebSocket live trace ([[007-ExecutionEngine]] §4) — 2-second polling stands in ([[013-Frontend]] §3), now backed by real trace events (the `events` table is populated for real by every agent activity).
-- [ ] Basic AuthN so the API isn't fully open ([[014-Security]] §1) — not urgent while single-user/single-machine, becomes a hard blocker before any second user or the real dedicated server ([[ADR-0004]]) is reachable by anyone else.
-- [ ] **`--permission-mode bypassPermissions` is a stopgap**, not the final security posture — acceptable only because Developer/Deploy currently only ever run against the disposable sandbox project. A real project needs [[009-MCP]] §4's per-role tool scoping instead of a blanket bypass ([[014-Security]] §4 gap, restated here since it's now live code, not just a documented risk).
+- [x] WebSocket live trace ([[007-ExecutionEngine]] §4) — real, not a stub: Postgres `LISTEN`/`NOTIFY` bridging the Worker to the API's in-memory connections, validated live with sub-second delivery. Board-wide list still polls every 2s (only the open task detail panel has the socket) — tracked below, not a real gap yet at this scale.
+- [x] Project lifecycle from the UI: create/edit/delete (with cascade + best-effort Temporal workflow termination on delete), shared memory editor, `PublishRecipe.previewUrl` + a "Testar" button on `Review` tasks, a real branch picker (`GET /git/branches`), Azure DevOps as a second selectable git provider.
+- [x] Task tags (`{Prefix}-{Number}`), a left project sidebar/tree, an all-tasks cross-project view, a global (estimated) spend indicator, light/dark theme toggle, task creation notes that the Planner fetches URLs from.
+- [x] Drag-and-drop actually works end-to-end (was reported broken — the whole card is the drag surface now, not a tiny hover-only handle) — [[013-Frontend]] §3.
+- [ ] **Basic AuthN so the API isn't fully open** ([[014-Security]] §1) — still nothing here. Not urgent while this is one founder on one machine; becomes a hard blocker the moment a second person, or the real dedicated server ([[ADR-0004]]), is reachable by anyone else. **This is the single largest gap between "works for me" and "works for a team."**
+- [ ] **`--permission-mode bypassPermissions` is still a stopgap**, not the final security posture — acceptable only because Developer/Deploy only ever run against the disposable sandbox project so far. A real project needs [[009-MCP]] §4's per-role tool scoping instead of a blanket bypass before it's safe to point at anything that matters ([[014-Security]] §4).
+- [ ] **`restartTargets`/`healthCheckUrl` in `PublishRecipe` are still unimplemented** ([[015-Deployment]] §2-3) — Deploy only runs `migrationCommand`. This is the reason the new "Testar" button is only as trustworthy as whatever externally keeps that URL's service current; closing this gap is what would make it trustworthy by construction.
+- [ ] Azure DevOps push/PR is implemented against `az repos pr create`'s documented shape but **not yet exercised against a real PR** ([[010-Plugins]] §5) — needs the founder's own real org/repo and explicit go-ahead to validate, not something to do unprompted.
 
 ## v2
 
 - Real dedicated infrastructure ([[ADR-0004]]) replacing the local machine, once the MVP items above are proven there first.
-- Azure DevOps plugin (the real acceptance test for [[010-Plugins]]'s interface genericity, per [[ADR-0002]]).
 - MCP servers beyond the v1 set: `az cli`, browser/Playwright ([[009-MCP]] §3).
 - Secrets storage mechanism resolved ([[014-Security]] §2), once a plugin actually needs real credentials.
-- Task detail view, other frontend navigation sections ([[013-Frontend]] §3).
+- CI/CD → `PipelineConfirmedDeployment` integration ([[015-Deployment]] §4) — still undesigned, no real pipeline to integrate against yet.
+- Diff/commits view in the task detail panel.
 
 ## v3
 
