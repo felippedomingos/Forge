@@ -32,7 +32,7 @@ namespace Forge.Infrastructure.Migrations
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     name = table.Column<string>(type: "text", nullable: false),
-                    kind = table.Column<int>(type: "integer", nullable: false),
+                    kind = table.Column<string>(type: "text", nullable: false),
                     version = table.Column<string>(type: "text", nullable: false),
                     configuration = table.Column<string>(type: "jsonb", nullable: false)
                 },
@@ -83,7 +83,7 @@ namespace Forge.Infrastructure.Migrations
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     project_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    agent_role = table.Column<int>(type: "integer", nullable: false),
+                    agent_role = table.Column<string>(type: "text", nullable: false),
                     key = table.Column<string>(type: "text", nullable: false),
                     value = table.Column<string>(type: "text", nullable: false),
                     updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
@@ -135,11 +135,11 @@ namespace Forge.Infrastructure.Migrations
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     task_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    agent_role = table.Column<int>(type: "integer", nullable: false),
+                    agent_role = table.Column<string>(type: "text", nullable: false),
                     model_provider = table.Column<string>(type: "text", nullable: false),
                     started_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     finished_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
-                    status = table.Column<int>(type: "integer", nullable: false),
+                    status = table.Column<string>(type: "text", nullable: false),
                     prompt_tokens = table.Column<int>(type: "integer", nullable: false),
                     completion_tokens = table.Column<int>(type: "integer", nullable: false),
                     cost_estimate = table.Column<decimal>(type: "numeric(10,4)", nullable: false)
@@ -173,7 +173,7 @@ namespace Forge.Infrastructure.Migrations
                     project_id = table.Column<Guid>(type: "uuid", nullable: false),
                     title = table.Column<string>(type: "text", nullable: false),
                     description = table.Column<string>(type: "text", nullable: true),
-                    state = table.Column<int>(type: "integer", nullable: false),
+                    state = table.Column<string>(type: "text", nullable: false),
                     priority = table.Column<int>(type: "integer", nullable: true),
                     branch_name = table.Column<string>(type: "text", nullable: true),
                     worktree_id = table.Column<Guid>(type: "uuid", nullable: true),
@@ -197,7 +197,7 @@ namespace Forge.Infrastructure.Migrations
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     name = table.Column<string>(type: "text", nullable: false),
-                    status = table.Column<int>(type: "integer", nullable: false),
+                    status = table.Column<string>(type: "text", nullable: false),
                     current_task_id = table.Column<Guid>(type: "uuid", nullable: true),
                     home_directory = table.Column<string>(type: "text", nullable: false),
                     created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)

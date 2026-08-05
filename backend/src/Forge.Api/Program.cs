@@ -1,8 +1,21 @@
+using System.Text.Json.Serialization;
 using Forge.Domain.Entities;
 using Forge.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Enums (TaskState, AgentRole, ...) serialize as their names ("Inbox"), not integer
+// indices - so the frontend contract matches docs/003-Domain.md directly.
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+
+// Local dev only: lets the Vite dev server (localhost:5173) call this API directly
+// when not going through the /api proxy. Tightened before any real deployment
+// per docs/014-Security.md (not yet written).
+builder.Services.AddCors(options =>
+    options.AddDefaultPolicy(policy =>
+        policy.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod()));
 
 // docs/002-Architecture.md §1: the API is a thin control plane - no lifecycle logic here,
 // that lives in Temporal workflows/activities (Forge.Worker). This DbContext is for
@@ -16,6 +29,8 @@ builder.Services.AddDbContext<ForgeDbContext>(options =>
         .UseSnakeCaseNamingConvention());
 
 var app = builder.Build();
+
+app.UseCors();
 
 // docs/012-API.md §2 - the endpoints below are the first slice, not the full v1 surface yet.
 

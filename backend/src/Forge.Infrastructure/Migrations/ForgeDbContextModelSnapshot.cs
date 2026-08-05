@@ -58,8 +58,9 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
-                    b.Property<int>("AgentRole")
-                        .HasColumnType("integer")
+                    b.Property<string>("AgentRole")
+                        .IsRequired()
+                        .HasColumnType("text")
                         .HasColumnName("agent_role");
 
                     b.Property<string>("Key")
@@ -172,8 +173,9 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("configuration");
 
-                    b.Property<int>("Kind")
-                        .HasColumnType("integer")
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
                         .HasColumnName("kind");
 
                     b.Property<string>("Name")
@@ -238,8 +240,9 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
-                    b.Property<int>("AgentRole")
-                        .HasColumnType("integer")
+                    b.Property<string>("AgentRole")
+                        .IsRequired()
+                        .HasColumnType("text")
                         .HasColumnName("agent_role");
 
                     b.Property<int>("CompletionTokens")
@@ -267,8 +270,9 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("started_at");
 
-                    b.Property<int>("Status")
-                        .HasColumnType("integer")
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
                         .HasColumnName("status");
 
                     b.Property<Guid>("TaskId")
@@ -349,8 +353,9 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("project_id");
 
-                    b.Property<int>("State")
-                        .HasColumnType("integer")
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
                         .HasColumnName("state");
 
                     b.Property<string>("Title")
@@ -439,8 +444,9 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("name");
 
-                    b.Property<int>("Status")
-                        .HasColumnType("integer")
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
                         .HasColumnName("status");
 
                     b.HasKey("Id")

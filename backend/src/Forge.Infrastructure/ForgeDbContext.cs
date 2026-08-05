@@ -33,6 +33,10 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
         {
             e.ToTable("tasks");
             e.HasKey(t => t.Id);
+            // docs/011-Database.md §2: `state text NOT NULL` - stored as its enum name,
+            // not the default int, so the column matches the documented schema and isn't
+            // silently corrupted if TaskState's member order ever changes.
+            e.Property(t => t.State).HasConversion<string>();
             e.HasIndex(t => new { t.ProjectId, t.State }).HasDatabaseName("ix_tasks_project_state");
             e.HasIndex(t => new { t.ProjectId, t.Priority }).HasDatabaseName("ix_tasks_project_priority");
             e.HasOne(t => t.Project).WithMany(p => p.Tasks).HasForeignKey(t => t.ProjectId);
@@ -57,6 +61,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
         {
             e.ToTable("workers");
             e.HasKey(w => w.Id);
+            e.Property(w => w.Status).HasConversion<string>();
             e.HasOne(w => w.CurrentTask).WithMany().HasForeignKey(w => w.CurrentTaskId);
         });
 
@@ -77,6 +82,8 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
         {
             e.ToTable("runs");
             e.HasKey(r => r.Id);
+            e.Property(r => r.AgentRole).HasConversion<string>();
+            e.Property(r => r.Status).HasConversion<string>();
             e.Property(r => r.CostEstimate).HasColumnType("numeric(10,4)");
             e.HasIndex(r => r.TaskId).HasDatabaseName("ix_runs_task");
             e.HasOne(r => r.Task).WithMany(t => t.Runs).HasForeignKey(r => r.TaskId);
@@ -95,6 +102,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
         {
             e.ToTable("plugins");
             e.HasKey(p => p.Id);
+            e.Property(p => p.Kind).HasConversion<string>();
             e.Property(p => p.Configuration).HasColumnType("jsonb");
         });
 
@@ -116,6 +124,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
         {
             e.ToTable("agent_memory");
             e.HasKey(a => a.Id);
+            e.Property(a => a.AgentRole).HasConversion<string>();
             e.HasOne(a => a.Project).WithMany().HasForeignKey(a => a.ProjectId);
             e.HasIndex(a => new { a.ProjectId, a.AgentRole, a.Key }).IsUnique();
         });
