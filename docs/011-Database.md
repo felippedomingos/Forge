@@ -22,6 +22,10 @@ CREATE TABLE projects (
   repository_url        text NOT NULL,
   root_branch           text NOT NULL,          -- 'main' | 'develop' | 'dev'
   git_provider_plugin_id uuid NOT NULL REFERENCES plugins(id),
+  local_path            text NULL,               -- canonical checkout path on the Worker's
+                                                   -- machine; added when the real Planner
+                                                   -- agent needed something to read
+                                                   -- (docs/005-Agents.md §2)
   created_at            timestamptz NOT NULL DEFAULT now()
 );
 
