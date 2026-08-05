@@ -1,3 +1,5 @@
+import { getToken, logout } from './auth'
+
 // Mirrors docs/003-Domain.md §3 and docs/012-API.md exactly.
 export const TASK_STATES = [
   'Inbox',
@@ -119,10 +121,21 @@ export interface TaskItem {
 const BASE_URL = '/api'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken()
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...init,
   })
+  // docs/adr/ADR-0006 - a 401 anywhere means the token's gone bad (expired, revoked) -
+  // drop back to the login screen immediately rather than letting every call site
+  // independently notice and handle it.
+  if (res.status === 401) {
+    logout()
+    throw new Error(`${init?.method ?? 'GET'} ${path} failed: 401`)
+  }
   if (!res.ok) {
     throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${res.status}`)
   }
@@ -213,4 +226,24 @@ export const api = {
   // account-level quota (see the backend endpoint's own comment) - a sum of
   // per-run CostEstimate, itself an API-list-price estimate, across every project.
   getGlobalCost: () => request<{ totalCostUsd: number; runCount: number }>('/cost'),
+  // docs/adr/ADR-0006 - auth endpoints. login/bootstrap/needsBootstrap are the only
+  // calls made with no token yet (handled fine here since `request` just omits the
+  // header when getToken() returns null).
+  needsBootstrap: () => request<{ needsBootstrap: boolean }>('/auth/needs-bootstrap'),
+  bootstrap: (name: string, email: string, password: string) =>
+    request<{ token: string }>('/auth/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password }),
+    }),
+  login: (email: string, password: string) =>
+    request<{ token: string }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  listUsers: () => request<{ id: string; name: string; email: string; role: string }[]>('/users'),
+  createUser: (name: string, email: string, role: string, password: string) =>
+    request<{ id: string; name: string; email: string; role: string }>('/users', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, role, password }),
+    }),
 }

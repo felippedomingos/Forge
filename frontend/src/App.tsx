@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   DndContext,
@@ -15,12 +15,14 @@ import { CreateTaskDialog } from '@/components/board/CreateTaskDialog'
 import { BoardColumn } from '@/components/board/BoardColumn'
 import { TaskDetailSheet } from '@/components/board/TaskDetailSheet'
 import { ProjectSidebar } from '@/components/board/ProjectSidebar'
+import { LoginScreen } from '@/components/auth/LoginScreen'
 import { api, TASK_STATES, type TaskState } from '@/lib/api'
 import { DROP_TARGETS } from '@/lib/state-config'
+import { AUTH_INVALID_EVENT, getCurrentUser, type AuthUser } from '@/lib/auth'
 
 // docs/013-Frontend.md: first slice of the board (docs/000-Vision.md §9 states).
 // Cross-project view (UC-1) by default; a project filter narrows it.
-function Board() {
+function Board({ user }: { user: AuthUser }) {
   const queryClient = useQueryClient()
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all')
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
@@ -96,6 +98,7 @@ function Board() {
         onSelectProject={setSelectedProjectId}
         taskCountByProject={taskCountByProject}
         totalTaskCount={allTasks.length}
+        user={user}
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -151,6 +154,22 @@ function Board() {
   )
 }
 
+// docs/adr/ADR-0006 - gates the whole app behind a valid, unexpired JWT. Re-checks on
+// AUTH_INVALID_EVENT (api.ts's request() fires it on any 401 - token expired mid-
+// session, not just at load) so a stale token drops back to the login screen instead
+// of leaving the board silently broken.
 export default function App() {
-  return <Board />
+  const [user, setUser] = useState<AuthUser | null>(() => getCurrentUser())
+
+  useEffect(() => {
+    const onAuthInvalid = () => setUser(null)
+    window.addEventListener(AUTH_INVALID_EVENT, onAuthInvalid)
+    return () => window.removeEventListener(AUTH_INVALID_EVENT, onAuthInvalid)
+  }, [])
+
+  if (!user) {
+    return <LoginScreen onAuthenticated={() => setUser(getCurrentUser())} />
+  }
+
+  return <Board user={user} />
 }

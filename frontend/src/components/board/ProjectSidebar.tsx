@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon, DollarSign } from 'lucide-react'
+import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon, DollarSign, LogOut } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/lib/useTheme'
 import { api, type Project } from '@/lib/api'
+import { logout, type AuthUser } from '@/lib/auth'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { CreateProjectDialog } from './CreateProjectDialog'
 
@@ -18,12 +19,14 @@ export function ProjectSidebar({
   onSelectProject,
   taskCountByProject,
   totalTaskCount,
+  user,
 }: {
   projects: Project[]
   selectedProjectId: string
   onSelectProject: (id: string) => void
   taskCountByProject: Record<string, number>
   totalTaskCount: number
+  user: AuthUser
 }) {
   const { theme, toggleTheme } = useTheme()
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
@@ -122,6 +125,20 @@ export function ProjectSidebar({
           {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
           {theme === 'dark' ? 'Light mode' : 'Dark mode'}
         </Button>
+
+        <div className="flex items-center justify-between gap-1.5 px-2 py-1">
+          <span className="min-w-0 truncate text-xs text-muted-foreground" title={user.email}>
+            {user.name}
+          </span>
+          <button
+            onClick={logout}
+            className="shrink-0 text-muted-foreground/60 hover:text-foreground"
+            aria-label="Log out"
+            title="Log out"
+          >
+            <LogOut className="size-3.5" />
+          </button>
+        </div>
       </div>
 
       {editingProject && (

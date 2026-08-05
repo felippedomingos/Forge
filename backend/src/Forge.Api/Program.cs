@@ -1,13 +1,25 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Net.WebSockets;
+using System.Security.Claims;
+using System.Text;
 using System.Text.Json.Serialization;
 using Forge.Api;
 using Forge.Domain.Entities;
 using Forge.Infrastructure;
 using Forge.Workflows;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Temporalio.Client;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// docs/adr/ADR-0006 - same env-var-with-local-dev-fallback pattern as
+// FORGE_CONNECTION_STRING. MUST be overridden before this runs anywhere reachable by
+// someone who shouldn't be able to forge tokens.
+var jwtSecret = Environment.GetEnvironmentVariable("FORGE_JWT_SECRET") ?? "forge-local-dev-jwt-secret-change-me";
+var jwtSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
 
 // Enums (TaskState, AgentRole, ...) serialize as their names ("Inbox"), not integer
 // indices - so the frontend contract matches docs/003-Domain.md directly.
@@ -58,13 +70,135 @@ builder.Services.AddSingleton(await TemporalClient.ConnectAsync(new TemporalClie
 builder.Services.AddSingleton<TaskEventBroadcaster>();
 builder.Services.AddHostedService<PostgresNotificationListener>();
 
+// docs/adr/ADR-0006 - JWT bearer auth, global default-deny below.
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = jwtSigningKey,
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+        };
+        // The browser's native WebSocket API can't set a custom Authorization header,
+        // so /ws/tasks/{id} carries its token as ?access_token= instead - the same
+        // workaround SignalR itself documents for this exact limitation.
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                if (context.Request.Path.StartsWithSegments("/ws") &&
+                    context.Request.Query.TryGetValue("access_token", out var token))
+                {
+                    context.Token = token;
+                }
+                return Task.CompletedTask;
+            },
+        };
+    });
+
+// Default-deny: every endpoint requires a valid JWT unless explicitly marked
+// .AllowAnonymous() (only /auth/login and /auth/bootstrap are).
+builder.Services.AddAuthorization(options =>
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build());
+
 var app = builder.Build();
 
 app.UseCors();
 app.UseWebSockets();
+app.UseAuthentication();
+app.UseAuthorization();
 
 const string TaskQueue = "forge-task-queue";
 static string WorkflowIdFor(Guid taskId) => $"task-{taskId}";
+
+static string IssueJwt(User user, SymmetricSecurityKey signingKey)
+{
+    var claims = new[]
+    {
+        new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+        new Claim(JwtRegisteredClaimNames.Email, user.Email),
+        new Claim(ClaimTypes.Role, user.Role),
+        new Claim("name", user.Name),
+    };
+    var token = new JwtSecurityToken(
+        claims: claims,
+        // docs/adr/ADR-0006 - fixed 24h, no refresh-token rotation at v1.
+        expires: DateTime.UtcNow.AddHours(24),
+        signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256));
+    return new JwtSecurityTokenHandler().WriteToken(token);
+}
+
+// docs/adr/ADR-0006 / docs/012-API.md §1 - auth endpoints. Only these two (plus the
+// WebSocket, handled via query-string token above) are reachable without a valid JWT.
+
+// Self-disabling: functions exactly once, the moment before any User row exists. Every
+// account after the founder's own first login goes through POST /users instead.
+app.MapPost("/auth/bootstrap", async (ForgeDbContext db, BootstrapRequest request) =>
+{
+    if (await db.Users.AnyAsync()) return Results.Forbid();
+
+    var user = new User
+    {
+        Id = Guid.NewGuid(),
+        Name = request.Name,
+        Email = request.Email,
+        Role = "Admin",
+        PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
+    };
+    db.Users.Add(user);
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new { token = IssueJwt(user, jwtSigningKey) });
+}).AllowAnonymous();
+
+app.MapGet("/auth/needs-bootstrap", async (ForgeDbContext db) =>
+    Results.Ok(new { needsBootstrap = !await db.Users.AnyAsync() })
+).AllowAnonymous();
+
+app.MapPost("/auth/login", async (ForgeDbContext db, LoginRequest request) =>
+{
+    var user = await db.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
+    if (user is null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+        return Results.Unauthorized();
+
+    return Results.Ok(new { token = IssueJwt(user, jwtSigningKey) });
+}).AllowAnonymous();
+
+// docs/adr/ADR-0006 - Admin-only (no public signup). `Role == "Admin"` is a plain
+// string check, not a claims/policy framework - there's exactly one authorization
+// distinction that matters today.
+app.MapPost("/users", async (ForgeDbContext db, ClaimsPrincipal principal, CreateUserRequest request) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var user = new User
+    {
+        Id = Guid.NewGuid(),
+        Name = request.Name,
+        Email = request.Email,
+        Role = request.Role,
+        PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
+    };
+    db.Users.Add(user);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/users/{user.Id}", new { user.Id, user.Name, user.Email, user.Role });
+});
+
+app.MapGet("/users", async (ForgeDbContext db, ClaimsPrincipal principal) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var users = await db.Users.AsNoTracking()
+        .Select(u => new { u.Id, u.Name, u.Email, u.Role })
+        .ToListAsync();
+    return Results.Ok(users);
+});
 
 // docs/012-API.md §2 - the endpoints below are the first slice, not the full v1 surface yet.
 
@@ -468,3 +602,7 @@ record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTarge
 // don't scope by role at all, and prompts (AgentActivities) read every entry for the
 // project regardless of which role originally wrote it.
 record MemoryEntryRequest(string Key, string Value);
+// docs/adr/ADR-0006
+record BootstrapRequest(string Name, string Email, string Password);
+record LoginRequest(string Email, string Password);
+record CreateUserRequest(string Name, string Email, string Role, string Password);

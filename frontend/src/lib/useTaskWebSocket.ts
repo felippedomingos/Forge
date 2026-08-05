@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { getToken } from './auth'
 
 // docs/007-ExecutionEngine.md §4 - the real WebSocket trace channel. Connects to
 // /api/ws/tasks/{id} (proxied to Forge.Api's WebSocket endpoint, docs/012-API.md §3)
@@ -16,8 +17,14 @@ export function useTaskWebSocket(taskId: string | null, onMessage: () => void) {
   useEffect(() => {
     if (!taskId) return
 
+    // docs/adr/ADR-0006 - the browser's native WebSocket API can't set a custom
+    // Authorization header, so the token rides along as a query param instead
+    // (extracted server-side in Program.cs's JwtBearerEvents.OnMessageReceived).
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${location.host}/api/ws/tasks/${taskId}`)
+    const token = getToken()
+    const socket = new WebSocket(
+      `${protocol}//${location.host}/api/ws/tasks/${taskId}${token ? `?access_token=${encodeURIComponent(token)}` : ''}`,
+    )
     socket.onmessage = () => onMessageRef.current()
 
     return () => socket.close()

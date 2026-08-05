@@ -6,12 +6,13 @@ Draft — Phase 3 (Architecture)
 
 ## 1. Current State (Honest Baseline)
 
-Nothing described below as "planned" exists yet beyond what's needed for local development. Specifically, as of this writing:
-
-- **No AuthN/AuthZ**: [[012-API]] §4 already flags this — every endpoint is open, callable by anyone who can reach `http://localhost:5080`. Acceptable only because the API is bound to a single local machine ([[ADR-0004]] amendment) with no network exposure.
+- **AuthN: implemented** ([[adr/ADR-0006]]) — JWT bearer tokens, `POST /auth/login`, admin-created accounts only (`POST /users`, gated on `Role == "Admin"`), a self-disabling `POST /auth/bootstrap` for the very first account. Every endpoint requires a valid token by default (`AddAuthorization`'s fallback policy) except the two auth endpoints themselves. This closed the single largest gap this document used to flag - not urgent-turned-mandatory the moment the founder confirmed real multi-user need.
+- **AuthZ remains coarse**: one boolean distinction (`Role == "Admin"` gates `POST /users`; everything else any authenticated user can do). No per-project or per-action permission matrix - [[000-Vision]] §6's personas don't map to differentiated API permissions yet, only differentiated usage patterns the UI doesn't distinguish either. Revisit if that's ever a real complaint, not before.
+- **`FORGE_JWT_SECRET` defaults to a hardcoded dev value when unset** — same pattern as `FORGE_CONNECTION_STRING` throughout this codebase, and the same caveat: **must** be set to a real secret before this runs anywhere reachable by someone who shouldn't be able to forge tokens.
 - **CORS** is configured permissively for local dev (`http://localhost:5173` only, but `AllowAnyHeader`/`AllowAnyMethod`) — fine for one trusted origin during development, not a policy that should survive to a real deployment unexamined.
 - **Postgres credentials** (`forge` / `forge_local_dev`) are hardcoded fallback defaults in both `Forge.Api` and `Forge.Workflows` (`PersistenceActivities`) — plausible for a local-only dev database, never acceptable once real credentials exist.
-- **No secrets manager integration** of any kind — there's nothing to manage yet, since no plugin has real credentials (the seeded `github` plugin row has an empty `configuration` JSONB).
+- **No secrets manager integration** of any kind — there's nothing to manage yet, since no plugin has real credentials (the seeded `github`/`azure-devops` plugin rows have empty `configuration` JSONB; the `az`/`gh` CLIs rely on this machine's own already-authenticated login, not a credential Forge itself stores).
+- **Agent execution trust is now a real, per-project gate**, not just a documented intention: `Project.AllowAgentBypassPermissions` ([[009-MCP]] §4, [[005-Agents]] §4/§5) — false by default, must be explicitly enabled before the Developer/Deploy agents can edit files or run shell commands for a project's tasks at all.
 
 This section exists so the gap is visible and tracked, not discovered later by accident.
 
@@ -25,7 +26,7 @@ Each `Project` ([[003-Domain]]) has exactly one `git_provider_plugin_id`. Creden
 
 ## 4. Agent Permission Boundaries
 
-[[009-MCP]] §4 already establishes the shape: tool access is fixed per agent role, not per task or user-configurable. The security-relevant restatement: a Planner activity should never be able to write to a Worktree, a Prioritizer should never get filesystem/terminal access at all, and a Deploy activity's terminal access should be scoped to publish-related commands, not an unrestricted shell. None of this is enforced in code yet since the activities don't call real tools — it's a requirement to carry into the real agent implementations, not a mechanism that exists today.
+**Implemented, in a simplified form.** [[009-MCP]] §4 originally proposed per-role MCP tool scoping (Planner never writes, Prioritizer never touches the filesystem, Deploy's shell access restricted to publish commands); what actually shipped is a coarser per-project trust flag instead (`Project.AllowAgentBypassPermissions` - see [[009-MCP]] §4's own note on this) - the founder's explicit simplification once faced with the real trade-off. Planner still never gets write access by construction (only `WebFetch`, narrowly, [[005-Agents]] §2); Developer and Deploy both refuse outright for any project not marked trusted, rather than running with a reduced/scoped tool set. This is a real, working boundary, just a coarser one than originally envisioned - fine as long as "trusted" or "not trusted" is the only distinction that matters, which is true today.
 
 ## 5. Blast Radius, Concretely
 
@@ -33,9 +34,11 @@ Worth stating plainly given [[000-Vision]]'s own framing (an autonomous agent wi
 
 ## 6. Audit Trail
 
-Already substantially covered by [[003-Domain]] §4's event catalog and [[002-Architecture]] §6 — every state transition is an `Event` row plus a Temporal workflow history entry. What's missing from a security-audit perspective specifically: no record yet of *who* configured a plugin's credentials, when, or from where. That's a gap to close once §1's "no AuthN" gap is closed — attribution is meaningless without knowing who's authenticated.
+Already substantially covered by [[003-Domain]] §4's event catalog and [[002-Architecture]] §6 — every state transition is an `Event` row plus a Temporal workflow history entry. What's missing from a security-audit perspective specifically: `Event.Actor` records `"user:<id>"` / `"agent:<role>"` per [[003-Domain]] §4's schema, but nothing yet resolves a JWT's `sub` claim into that `user:<id>` at the point a human action (task creation, a move, an answer) is recorded - so today's events don't yet distinguish *which* authenticated user did something, only that some agent role did. Worth closing now that AuthN actually exists to attribute to.
 
 ## 7. Open Questions
 
 - Secrets storage mechanism (§2) — genuinely undecided.
-- Whether AuthN should be added before or after any real deployment beyond the founder's own local machine — no other user exists yet to require it, so there's no pressure to decide this now, but it must happen before [[ADR-0004]]'s real dedicated server is reachable by anyone else.
+- Threading the authenticated user's identity into `Event.Actor` (§6) — AuthN exists now, this is no longer blocked on it, just not done yet.
+- Password reset flow — doesn't exist. An Admin would need to directly update a `PasswordHash` today. Reasonable v2 addition once there's more than a couple of real accounts.
+- 24h fixed JWT expiration, no refresh-token rotation ([[adr/ADR-0006]]) — a deliberate v1 simplification for a small team, revisit if daily re-login becomes a real annoyance rather than a hypothetical one.
