@@ -38,6 +38,14 @@ public class BacklogSchedulerWorkflow
         },
     };
 
+    // Prioritizer calls a real LLM (docs/005-Agents.md §3) - a generous timeout, no
+    // aggressive retry (unlike the snapshot query, this costs real money per attempt).
+    private static readonly ActivityOptions PrioritizeActivityOptions = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromMinutes(5),
+        RetryPolicy = new RetryPolicy { MaximumAttempts = 2 },
+    };
+
     [WorkflowRun]
     public async Task RunAsync(Guid projectId)
     {
@@ -46,6 +54,17 @@ public class BacklogSchedulerWorkflow
             var snapshot = await Workflow.ExecuteActivityAsync(
                 () => SchedulingActivities.GetSchedulingSnapshotAsync(projectId),
                 SnapshotActivityOptions);
+
+            // docs/005-Agents.md §3 - only invoked when there's actually something
+            // unprioritized, not on every poll tick, since each call is a real (paid)
+            // LLM invocation. Re-loops immediately afterward to pick up fresh priorities.
+            if (snapshot.UnprioritizedBacklogCount > 0)
+            {
+                await Workflow.ExecuteActivityAsync(
+                    () => AgentActivities.PrioritizeAsync(projectId),
+                    PrioritizeActivityOptions);
+                continue;
+            }
 
             if (snapshot.TopBacklogTaskId is { } taskId &&
                 snapshot.ExecutingCount < MaxConcurrentExecutingPerProject)

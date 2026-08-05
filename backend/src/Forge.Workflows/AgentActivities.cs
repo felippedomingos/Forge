@@ -503,8 +503,82 @@ public static class AgentActivities
         }
     }
 
-    // docs/005-Agents.md §3. Per-project ordering - not implemented as real logic yet;
-    // returning 0 rather than throwing keeps the workflow shape testable.
+    private record PrioritizationLlmResponse(
+        [property: JsonPropertyName("orderedTaskIds")] List<string>? OrderedTaskIds);
+
+    // docs/005-Agents.md §3 - real. Unlike the other 4 roles, this one is scoped to the
+    // whole project's Backlog, not a single task, per the decision already recorded
+    // there (per-project, not per-task, priority ordering). Called by
+    // BacklogSchedulerWorkflow only when unprioritized tasks exist, not on a fixed
+    // timer - re-running this on every 5s poll tick would spend real money
+    // re-prioritizing a backlog that hasn't changed.
     [Activity]
-    public static Task<int> PrioritizeAsync(Guid projectId) => Task.FromResult(0);
+    public static async Task PrioritizeAsync(Guid projectId)
+    {
+        await using var db = OpenDb();
+        var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId);
+        var backlogTasks = await db.Tasks
+            .Where(t => t.ProjectId == projectId && t.State == TaskState.Backlog)
+            .OrderBy(t => t.CreatedAt)
+            .ToListAsync();
+
+        if (backlogTasks.Count == 0) return;
+
+        if (backlogTasks.Count == 1 || project?.LocalPath is not { } localPath || !Directory.Exists(localPath))
+        {
+            // Nothing to compare against, or no repo context to reason with - fall
+            // back to creation order (FIFO) rather than blocking scheduling on it.
+            for (var i = 0; i < backlogTasks.Count; i++) backlogTasks[i].Priority = i;
+            await db.SaveChangesAsync();
+            foreach (var t in backlogTasks)
+                await RecordEventAsync(db, t.Id, "PrioritizationCompleted", AgentRole.Prioritizer,
+                    new { priority = t.Priority, method = "fifo-fallback" });
+            return;
+        }
+
+        var taskList = string.Join("\n", backlogTasks.Select(t => $"- {t.Id}: {t.Title}"));
+        var prompt = $$"""
+            You are the Prioritizer agent inside Forge. Order the following backlog
+            tasks for this project by importance/impact, most important first. Use
+            your judgment about the project based on the repository in the current
+            working directory; if nothing distinguishes them, keep the given order.
+
+            Tasks:
+            {{taskList}}
+
+            Respond with ONLY a single JSON object, no other text, no markdown fences,
+            matching exactly this shape:
+            {"orderedTaskIds": string array containing exactly the task IDs above, most important first}
+            """;
+
+        var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, localPath);
+        var parsed = TryParseLlmJson<PrioritizationLlmResponse>(cliResult.Text);
+
+        // Attaching this batch call's cost to the first task by creation order - Run
+        // is schema'd as single-task (docs/011-Database.md), which doesn't cleanly fit
+        // a call spanning multiple tasks. Noted as a known limitation, not fixed here.
+        await RecordRunAsync(db, backlogTasks[0].Id, AgentRole.Prioritizer,
+            cliResult.CostUsd, cliResult.InputTokens, cliResult.OutputTokens,
+            parsed is null ? RunStatus.Failed : RunStatus.Success);
+
+        // Validate the model's ordering against the real task set: keep only IDs that
+        // actually exist, then append anything it omitted (preserving original order)
+        // so every task still gets a priority - never leave one unprioritized because
+        // the model's list was incomplete or hallucinated an ID.
+        var byId = backlogTasks.ToDictionary(t => t.Id.ToString(), t => t);
+        var ordered = new List<TaskItem>();
+        foreach (var id in parsed?.OrderedTaskIds ?? [])
+            if (byId.TryGetValue(id, out var t) && !ordered.Contains(t))
+                ordered.Add(t);
+        foreach (var t in backlogTasks)
+            if (!ordered.Contains(t))
+                ordered.Add(t);
+
+        for (var i = 0; i < ordered.Count; i++) ordered[i].Priority = i;
+        await db.SaveChangesAsync();
+
+        foreach (var t in ordered)
+            await RecordEventAsync(db, t.Id, "PrioritizationCompleted", AgentRole.Prioritizer,
+                new { priority = t.Priority, method = parsed is null ? "fallback-unparsed-response" : "llm" });
+    }
 }

@@ -5,7 +5,7 @@ using Temporalio.Activities;
 
 namespace Forge.Workflows;
 
-public record SchedulingSnapshot(int ExecutingCount, Guid? TopBacklogTaskId);
+public record SchedulingSnapshot(int ExecutingCount, Guid? TopBacklogTaskId, int UnprioritizedBacklogCount);
 
 // docs/006-Scheduler.md §1 - queries Postgres directly (the authoritative current-state
 // store per docs/011-Database.md §3) rather than tracking counts in workflow memory,
@@ -36,6 +36,9 @@ public static class SchedulingActivities
             .Select(t => (Guid?)t.Id)
             .FirstOrDefaultAsync();
 
-        return new SchedulingSnapshot(executingCount, topBacklogTaskId);
+        var unprioritizedCount = await db.Tasks
+            .CountAsync(t => t.ProjectId == projectId && t.State == TaskState.Backlog && t.Priority == null);
+
+        return new SchedulingSnapshot(executingCount, topBacklogTaskId, unprioritizedCount);
     }
 }
