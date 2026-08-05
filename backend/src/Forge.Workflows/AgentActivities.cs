@@ -391,7 +391,12 @@ public static class AgentActivities
     private record PublishRecipeDto(
         [property: JsonPropertyName("migrationCommand")] string? MigrationCommand,
         [property: JsonPropertyName("restartTargets")] List<string>? RestartTargets,
-        [property: JsonPropertyName("healthCheckUrl")] string? HealthCheckUrl);
+        [property: JsonPropertyName("healthCheckUrl")] string? HealthCheckUrl,
+        // docs/015-Deployment.md §2 - purely informational: where a human clicks "Testar"
+        // to eyeball the result once a task reaches Review. Never read by DeployAsync
+        // itself (unlike healthCheckUrl, which is for an automated check that isn't
+        // implemented yet either) - this field only exists for the frontend button.
+        [property: JsonPropertyName("previewUrl")] string? PreviewUrl);
 
     // docs/005-Agents.md §5, docs/015-Deployment.md §2/§3. Real implementation, but
     // deliberately partial: only `migrationCommand` is executed. `restartTargets` and

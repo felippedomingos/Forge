@@ -29,6 +29,26 @@ export interface Project {
   createdAt: string
 }
 
+// docs/015-Deployment.md §2 - Project.publishRecipe's shape, stored as a raw JSON
+// string rather than parsed server-side (same reasoning as the backend's own
+// PublishRecipeDto). Only `previewUrl` has a frontend affordance today (the
+// Review-stage "Testar" button) - the rest exist for the Deploy agent.
+export interface PublishRecipe {
+  migrationCommand: string | null
+  restartTargets: string[] | null
+  healthCheckUrl: string | null
+  previewUrl: string | null
+}
+
+export function parsePublishRecipe(raw: string | null): PublishRecipe | null {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as PublishRecipe
+  } catch {
+    return null
+  }
+}
+
 // docs/005-Agents.md §7 - project-wide shared memory, read by every agent role
 // regardless of which role wrote a given entry.
 export interface MemoryEntry {
@@ -106,6 +126,14 @@ export const api = {
     request<Project>(`/projects/${projectId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
+    }),
+  // Preserves whatever fields aren't exposed in the edit dialog (e.g.
+  // migrationCommand) by merging into the current recipe before sending - a plain
+  // PATCH-like partial update, since the backend endpoint replaces the whole thing.
+  updatePublishRecipe: (projectId: string, recipe: PublishRecipe) =>
+    request<void>(`/projects/${projectId}/publish-recipe`, {
+      method: 'PATCH',
+      body: JSON.stringify(recipe),
     }),
   getProjectMemory: (projectId: string) => request<MemoryEntry[]>(`/projects/${projectId}/memory`),
   setMemoryEntry: (projectId: string, key: string, value: string) =>

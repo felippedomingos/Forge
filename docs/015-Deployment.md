@@ -18,10 +18,17 @@ PublishRecipe {
   MigrationCommand?: string   // e.g. "dotnet ef database update", run first if present
   RestartTargets: string[]    // e.g. Docker Compose service names to restart, in order
   HealthCheckUrl?: string     // polled after restart; DeployCompleted only fires once it responds
+  PreviewUrl?: string         // opened by the founder-requested "Testar" button once a
+                              // task reaches Review - purely informational, never read
+                              // by DeployAsync itself, see below
 }
 ```
 
 **Implemented** (not just proposed): stored as a JSONB column, `Project.PublishRecipe`, matching `Plugin.Configuration`'s pattern rather than an EF owned type — schema can grow without a migration each time. Only `migrationCommand` is actually executed by `AgentActivities.DeployAsync`; `restartTargets` and `healthCheckUrl` are accepted by the shape but not exercised — no test project has a real running service to restart or poll yet, and implementing that logic against nothing to verify it against would be guessing at a shape, not building one.
+
+**`previewUrl` is deliberately the cheap half of "can I see the result."** The founder asked for a one-click "Testar" button on a `Review` task that opens a browser at the published solution. The complete version of that (Deploy agent actually restarting the service via `restartTargets`, gating on `healthCheckUrl` before ever reaching `Review`) is real, unbuilt work — tracked below, not done here. What's shipped instead: `previewUrl` is a plain human-maintained pointer (set via the project edit dialog, [[013-Frontend]]), and the button just opens it. It's only as trustworthy as whatever actually keeps that URL's service current — today, nothing does that automatically.
+
+**Bug found and fixed while wiring this in**: the `PATCH /projects/{id}/publish-recipe` handler ([[012-API]]) called `JsonSerializer.Serialize(request)` directly, bypassing the API's configured camelCase JSON options (that configuration only applies to the framework's own request/response pipeline, not a manual serializer call) — it silently wrote `PascalCase` keys (`"PreviewUrl"`) into the stored JSON. `AgentActivities.PublishRecipeDto` tolerated it (case-insensitive deserialization), but the frontend's plain `JSON.parse` didn't, so a saved `previewUrl` read back as `undefined`. Fixed by passing `JsonNamingPolicy.CamelCase` explicitly at that one call site.
 
 **Idempotency is the recipe author's responsibility, not something Forge enforces.** [[006-Scheduler]] §3 already caps Deploy activity retries at 2 attempts specifically because a partially-applied deploy shouldn't be retried blindly — but if a project's `MigrationCommand` isn't itself safe to run twice, that's a property of how that project's migrations are written, not something the Deploy agent can guarantee generically.
 
@@ -39,5 +46,5 @@ PublishRecipe {
 
 - Exact storage shape for `PublishRecipe` (§2) once a second real project needs one — the JSONB-on-Project proposal above is a reasonable default, not a decision that's been stress-tested against a second use case.
 - The CI/CD webhook mechanism (§4) is undesigned; revisit once Forge's own repository has a real pipeline to integrate against.
-- No API endpoint exists yet to configure a `PublishRecipe` — it was set directly via SQL for this validation. `POST /projects` ([[012-API]]) should probably accept it, or a dedicated `PATCH /projects/{id}/publish-recipe`.
 - A worktree left behind after a refused (dirty) removal has no automatic detection/alerting — a human currently has to notice and clean it up manually, as happened during this validation.
+- `restartTargets`/`healthCheckUrl` remain unimplemented (see above) — the real fix for `previewUrl` potentially pointing at a stale build. Worth doing once a project with an actual long-running service (not just a script) needs `Testar` to be trustworthy by construction rather than by hand.

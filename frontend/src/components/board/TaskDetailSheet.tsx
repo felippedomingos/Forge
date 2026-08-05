@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, DollarSign } from 'lucide-react'
+import { CheckCircle2, Circle, DollarSign, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Sheet,
@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { STATE_CONFIG } from '@/lib/state-config'
-import { api } from '@/lib/api'
+import { api, parsePublishRecipe } from '@/lib/api'
 import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
 
 // docs/000-Vision.md UC-9: click a task, see what it does and how the agent is
@@ -86,7 +86,8 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
 
   const task = taskQuery.data
   const events = eventsQuery.data ?? []
-  const projectPrefix = projectsQuery.data?.find((p) => p.id === task?.projectId)?.prefix
+  const project = projectsQuery.data?.find((p) => p.id === task?.projectId)
+  const previewUrl = parsePublishRecipe(project?.publishRecipe ?? null)?.previewUrl
   const config = task ? STATE_CONFIG[task.state] : null
   const inProgress = task && ['Inbox', 'Executing', 'Publishing'].includes(task.state)
   const totalCost = task?.runs?.reduce((sum, r) => sum + r.costEstimate, 0) ?? 0
@@ -108,9 +109,9 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
               <div className="flex items-center gap-2">
                 <config.icon className={`size-3.5 text-primary ${config.spin ? 'animate-spin' : ''}`} />
                 <Badge variant="secondary" className="text-[10px]">{config.label}</Badge>
-                {projectPrefix && (
+                {project && (
                   <Badge variant="outline" className="font-mono text-[10px]">
-                    {projectPrefix}-{task.number}
+                    {project.prefix}-{task.number}
                   </Badge>
                 )}
                 {inProgress && (
@@ -181,9 +182,22 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
                 </Button>
               )}
               {task.state === 'Review' && (
-                <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate()}>
-                  Approve → Done
-                </Button>
+                <div className="flex gap-2">
+                  {previewUrl && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5"
+                      onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}
+                    >
+                      <ExternalLink className="size-3.5" />
+                      Testar
+                    </Button>
+                  )}
+                  <Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate()}>
+                    Approve → Done
+                  </Button>
+                </div>
               )}
 
               <Separator />

@@ -292,7 +292,12 @@ app.MapPatch("/projects/{id:guid}/publish-recipe", async (ForgeDbContext db, Gui
     var project = await db.Projects.FindAsync(id);
     if (project is null) return Results.NotFound();
 
-    project.PublishRecipe = System.Text.Json.JsonSerializer.Serialize(request);
+    // camelCase explicitly - this is a raw JsonSerializer.Serialize call, so it does
+    // NOT go through the ConfigureHttpJsonOptions pipeline above; without this it
+    // writes PascalCase keys ("PreviewUrl"), which AgentActivities.PublishRecipeDto
+    // tolerates (case-insensitive) but the frontend's plain JSON.parse does not.
+    project.PublishRecipe = System.Text.Json.JsonSerializer.Serialize(request,
+        new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
     await db.SaveChangesAsync();
     return Results.Ok(project);
 });
@@ -338,7 +343,7 @@ record CreateTaskRequest(Guid ProjectId, string Title);
 record AnswerQuestionsRequest(List<string> Answers);
 record MoveTaskRequest(TaskState TargetState);
 // docs/015-Deployment.md §2 - matches AgentActivities.PublishRecipeDto's shape exactly.
-record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTargets, string? HealthCheckUrl);
+record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTargets, string? HealthCheckUrl, string? PreviewUrl);
 // docs/005-Agents.md §7 - despite AgentMemory's per-(project,role) schema, the founder
 // wants this to read/write as project-wide SHARED memory: the UI and these endpoints
 // don't scope by role at all, and prompts (AgentActivities) read every entry for the

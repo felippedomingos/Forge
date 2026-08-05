@@ -1,10 +1,20 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Forge</title>
+    <!-- Applied before React mounts to avoid a light->dark (or vice versa) flash on
+         load - founder feedback: default flipped to light ("achando tudo muito escuro"),
+         but the choice must still persist across reloads via the same key useTheme.ts
+         reads/writes (docs/013-Frontend.md). -->
+    <script>
+      (function () {
+        var stored = localStorage.getItem('forge-theme')
+        if (stored === 'dark') document.documentElement.classList.add('dark')
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

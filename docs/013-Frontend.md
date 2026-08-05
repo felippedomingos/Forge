@@ -12,7 +12,7 @@ Vite + React + TypeScript + Tailwind v4 (via the `@tailwindcss/vite` plugin) + T
 
 Chosen via direct founder Q&A, not assumed:
 
-- **Aesthetic**: Notion-inspired — warm neutrals, generous spacing, friendly rather than clinical — but **dark-first** (the founder's own combination, not a stock preset). `index.html` sets `class="dark"` by default; light mode is still fully defined in `index.css`, not a half-finished fallback, since a toggle is a reasonable near-future add.
+- **Aesthetic**: Notion-inspired — warm neutrals, generous spacing, friendly rather than clinical. Originally shipped dark-first; flipped to **light-first** after founder feedback that dark read as too dark for daily use (§3's toggle). Both themes are fully defined in `index.css` — this was a default change, not a removal.
 - **Accent color**: amber/orange (`oklch` hue ~55-60°), chosen to fit "Forge" (forge, fire, hot metal) rather than the indigo/violet nearly every dev tool defaults to.
 - **Warm neutrals, not cold gray**: every neutral token (background/card/border/muted) carries a slight warm hue (~55-70° in OKLCH) instead of shadcn's default 0-chroma gray — this is what actually reads as "Notion-like" rather than "generic dark mode."
 - **Components**: shadcn/ui's Radix-based primitives (Button, Input, Select, Dialog, Sheet, Badge, Card, Skeleton, Separator, Label, Sonner/Toast) — accessible by default, source lives in `src/components/ui/` (not an npm dependency), fully restyled via the theme tokens above rather than shadcn's stock look.
@@ -27,8 +27,10 @@ Chosen via direct founder Q&A, not assumed:
 - **Task detail panel**: a `Sheet` sliding from the right — description, acceptance-criteria checklist, live event timeline, per-run cost. Shows `PlannerStarted → PlannerInvokingModel → PlannerCompleted` in near-real-time during a real (multi-second) Claude call.
 - **Column hints** (founder-requested): a short, always-visible, amber-highlighted line above every column header explaining what happens in/to a task there (e.g. Awaiting Publish → "Drag/click Publish when ready") — makes the board self-explanatory without hovering or reading docs.
 - **Project sidebar** (founder-requested): a left-hand nav replacing the old header dropdown — an "All tasks" entry (cross-project view, [[000-Vision]] UC-1) plus one row per Project, each showing its live task count and an edit (pencil) action revealed on hover.
-- **Project edit dialog**: opened from the sidebar's pencil icon — `name`/`repositoryUrl`/`rootBranch`/`localPath` (`PATCH /projects/{id}`, [[012-API]]), plus a **shared memory** editor (list existing `AgentMemory` entries with delete, add a new key/value pair) — the same memory the Planner/Developer prompts actually read ([[005-Agents]] §7). `prefix` is shown as a badge but not editable here (immutable once tasks reference it).
+- **Project edit dialog**: opened from the sidebar's pencil icon — `name`/`repositoryUrl`/`rootBranch`/`localPath` (`PATCH /projects/{id}`, [[012-API]]), a **Preview URL** field (see below), plus a **shared memory** editor (list existing `AgentMemory` entries with delete, add a new key/value pair) — the same memory the Planner/Developer prompts actually read ([[005-Agents]] §7). `prefix` is shown as a badge but not editable here (immutable once tasks reference it).
 - **Task tags** (founder-requested): every card and the task detail panel render `{Project.prefix}-{Task.number}` (e.g. `FORGE-42`) so a task can be referenced in conversation without pasting a raw GUID.
+- **"Testar" button** (founder-requested): on a `Review`-stage task, if the project's `PublishRecipe.previewUrl` is set ([[015-Deployment]] §2), the detail panel shows a "Testar" button next to "Approve → Done" that opens it in a new tab — one click from "task is ready for human review" to "see it running," instead of hunting down the URL manually. Absent if no `previewUrl` is configured.
+- **Light/dark toggle** (`useTheme.ts`): a button at the bottom of the sidebar switches themes and persists the choice in `localStorage` (`forge-theme`); an inline script in `index.html` applies it before React mounts to avoid a flash on load. **Light is now the default** — founder feedback that the original dark-first choice ([[013-Frontend]] §2, as originally written) read as too dark day-to-day. Dark remains fully defined and one click away, not removed.
 - **Real-time via WebSocket** (`useTaskWebSocket`, [[007-ExecutionEngine]] §4): the task detail panel connects to `/ws/tasks/{id}` and refetches the instant a "refresh" push arrives — validated live with sub-second delivery. A 10s poll (`refetchInterval`) remains only as a fallback for a dropped socket, not the primary mechanism anymore. The board's own task list still polls every 2s and does **not** yet have a WebSocket (would need one connection per visible task or a board-wide channel that doesn't exist — see [[007-ExecutionEngine]] §6).
 - **Toasts** (Sonner) for action feedback (task created, promoted, published, approved, drag rejected) instead of silent state changes.
 
@@ -39,7 +41,6 @@ Chosen via direct founder Q&A, not assumed:
 - **Diff/commits view** in the task detail panel — meaningless until there's a real diff to show beyond the commit message already in the timeline.
 - **Board-wide real-time**: only the (single, currently-open) task detail panel has a WebSocket; the board's cross-task list still polls every 2s.
 - **Board views beyond Kanban** (list, timeline, tree) — post-v1 per [[000-Vision]] §7.
-- **Light/dark toggle UI** — both themes are fully defined in CSS, but there's no control to switch; dark is hardcoded via the `class="dark"` on `<html>`.
 
 ## 5. Design Notes
 

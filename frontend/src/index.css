@@ -50,9 +50,10 @@
 
 /* Forge theme: warm (Notion-like) neutrals - hue ~60-70deg instead of the
    shadcn default's 0-chroma cold gray - plus an amber accent (docs/013-Frontend.md
-   design direction, founder-selected). Dark is the default surface (index.html sets
-   class="dark" on <html>); :root below still defines a real light theme, not a
-   half-finished fallback, since a dark/light toggle is a reasonable near-future add. */
+   design direction, founder-selected). Light is the default surface as of the
+   useTheme.ts toggle (founder feedback: the original dark-first default read as too
+   dark day-to-day); .dark below is applied by that hook, not hardcoded in index.html
+   anymore. */
 :root {
     --background: oklch(0.98 0.006 75);
     --foreground: oklch(0.24 0.02 55);

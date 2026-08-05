@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { FolderGit2, ListTodo, Pencil, Flame } from 'lucide-react'
+import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useTheme } from '@/lib/useTheme'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import type { Project } from '@/lib/api'
 
@@ -21,6 +23,7 @@ export function ProjectSidebar({
   taskCountByProject: Record<string, number>
   totalTaskCount: number
 }) {
+  const { theme, toggleTheme } = useTheme()
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   // Looked up fresh from `projects` every render (rather than snapshotting the Project
   // object on click) so the dialog's title/fields stay in sync after a save re-fetches
@@ -87,6 +90,16 @@ export function ProjectSidebar({
           <p className="px-2 py-1 text-[11px] text-muted-foreground/50">No projects yet</p>
         )}
       </div>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        className="mt-auto w-fit gap-1.5 text-muted-foreground"
+        onClick={toggleTheme}
+      >
+        {theme === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+        {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+      </Button>
 
       {editingProject && (
         <ProjectEditDialog

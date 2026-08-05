@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { api, type Project } from '@/lib/api'
+import { api, parsePublishRecipe, type Project } from '@/lib/api'
 
 // docs/003-Domain.md / docs/005-Agents.md §7 - founder-requested: each project's repo
 // link and shared memory must be editable in one place, not scattered across raw API
@@ -36,6 +36,7 @@ export function ProjectEditDialog({
   const [repositoryUrl, setRepositoryUrl] = useState(project.repositoryUrl)
   const [rootBranch, setRootBranch] = useState(project.rootBranch)
   const [localPath, setLocalPath] = useState(project.localPath ?? '')
+  const [previewUrl, setPreviewUrl] = useState(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
 
@@ -45,6 +46,7 @@ export function ProjectEditDialog({
     setRepositoryUrl(project.repositoryUrl)
     setRootBranch(project.rootBranch)
     setLocalPath(project.localPath ?? '')
+    setPreviewUrl(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
   }, [open, project])
 
   const memoryQuery = useQuery({
@@ -65,6 +67,23 @@ export function ProjectEditDialog({
       invalidate()
     },
     onError: () => toast.error('Could not update the project.'),
+  })
+
+  const savePreviewUrl = useMutation({
+    mutationFn: () => {
+      const current = parsePublishRecipe(project.publishRecipe)
+      return api.updatePublishRecipe(project.id, {
+        migrationCommand: current?.migrationCommand ?? null,
+        restartTargets: current?.restartTargets ?? null,
+        healthCheckUrl: current?.healthCheckUrl ?? null,
+        previewUrl: previewUrl || null,
+      })
+    },
+    onSuccess: () => {
+      toast.success('Preview URL saved.')
+      invalidate()
+    },
+    onError: () => toast.error('Could not save the preview URL.'),
   })
 
   const saveMemoryEntry = useMutation({
@@ -131,6 +150,33 @@ export function ProjectEditDialog({
           >
             Save details
           </Button>
+
+          <Separator />
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="proj-preview-url">Preview URL</Label>
+            <p className="text-xs text-muted-foreground">
+              Opened by the "Testar" button on a task once it reaches Review — the deployed
+              instance a human checks by hand. Not polled or verified by Forge itself.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                id="proj-preview-url"
+                placeholder="http://localhost:5173"
+                value={previewUrl}
+                onChange={(e) => setPreviewUrl(e.target.value)}
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                className="shrink-0"
+                disabled={savePreviewUrl.isPending}
+                onClick={() => savePreviewUrl.mutate()}
+              >
+                Save
+              </Button>
+            </div>
+          </div>
 
           <Separator />
 
