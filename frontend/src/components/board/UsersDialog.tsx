@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Users as UsersIcon } from 'lucide-react'
+import { Pencil, Trash2, Users as UsersIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -38,6 +38,19 @@ function UserRow({ user }: { user: { id: string; name: string; email: string; ro
     onError: () => toast.error('Could not update the user.'),
   })
 
+  const remove = useMutation({
+    mutationFn: () => api.deleteUser(user.id),
+    onSuccess: () => {
+      toast.success('User deleted.')
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+    },
+    onError: (error: Error) => {
+      toast.error(
+        error.message.includes('409') ? 'Cannot delete the last Admin user.' : 'Could not delete the user.'
+      )
+    },
+  })
+
   if (!editing) {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 p-2">
@@ -59,6 +72,16 @@ function UserRow({ user }: { user: { id: string; name: string; email: string; ro
           aria-label={`Edit ${user.name}`}
         >
           <Pencil className="size-3.5" />
+        </button>
+        <button
+          onClick={() => {
+            if (window.confirm(`Delete ${user.name}? This cannot be undone.`)) remove.mutate()
+          }}
+          disabled={remove.isPending}
+          className="shrink-0 text-muted-foreground/50 hover:text-destructive disabled:opacity-50"
+          aria-label={`Delete ${user.name}`}
+        >
+          <Trash2 className="size-3.5" />
         </button>
       </div>
     )

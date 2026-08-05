@@ -268,4 +268,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+  // 409 when the target is the last remaining Admin - see Program.cs's DELETE /users/{id}.
+  deleteUser: (userId: string) => request<void>(`/users/${userId}`, { method: 'DELETE' }),
 }

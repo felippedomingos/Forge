@@ -227,6 +227,25 @@ app.MapPut("/users/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal princip
     return Results.Ok(new { user.Id, user.Name, user.Email, user.Role });
 });
 
+// Admin-only, same check as POST/GET/PUT /users above. Refuses to remove the last
+// Admin account - without this, an Admin could lock every user (including themselves)
+// out of user management entirely, with no way back in short of touching the DB directly.
+app.MapDelete("/users/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var user = await db.Users.FindAsync(id);
+    if (user is null) return Results.NotFound();
+
+    if (user.Role == "Admin" && await db.Users.CountAsync(u => u.Role == "Admin") <= 1)
+        return Results.Conflict(new { error = "Cannot delete the last Admin user." });
+
+    db.Users.Remove(user);
+    await db.SaveChangesAsync();
+
+    return Results.Ok();
+});
+
 // docs/adr/ADR-0006's noted gap ("no password reset flow exists yet") - this is the
 // self-service half of it: any authenticated user can change their own password by
 // proving they know the current one (BCrypt.Verify), no Admin action needed. Admin-driven
