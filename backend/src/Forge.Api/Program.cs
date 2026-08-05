@@ -77,6 +77,28 @@ app.MapGet("/projects", async (ForgeDbContext db) =>
 app.MapGet("/plugins", async (ForgeDbContext db) =>
     await db.Plugins.AsNoTracking().ToListAsync());
 
+// Founder-requested: the project create/edit dialogs' "Root branch" field should list
+// a repository's actual branches, not a hardcoded main/develop/dev guess - a real repo
+// can use anything. Deliberately provider-agnostic: `git ls-remote` talks to the git
+// remote directly over whatever transport/credentials this machine already has
+// configured for it (same as every other GitOps call), so it works identically for
+// GitHub, Azure DevOps, or anything else without a provider-specific API integration.
+// Not scoped to an existing Project - called from the create dialog before one exists.
+app.MapGet("/git/branches", async (string repositoryUrl) =>
+{
+    var result = await GitOps.RunAsync(Path.GetTempPath(), "ls-remote", "--heads", repositoryUrl);
+    if (!result.Success)
+        return Results.BadRequest(new { error = result.Stderr.Trim() });
+
+    var branches = result.Stdout
+        .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Select(line => line.Split("refs/heads/").ElementAtOrDefault(1))
+        .Where(b => !string.IsNullOrWhiteSpace(b))
+        .ToList();
+
+    return Results.Ok(new { branches });
+});
+
 app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, CreateProjectRequest request) =>
 {
     var project = new Project

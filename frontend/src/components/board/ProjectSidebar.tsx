@@ -95,7 +95,7 @@ export function ProjectSidebar({
               className="shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
               aria-label={`Edit ${project.name}`}
             >
-              <Pencil className="size-3" />
+              <Pencil className="size-3.5" />
             </button>
           </div>
         ))}

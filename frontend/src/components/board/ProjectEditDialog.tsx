@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api, parsePublishRecipe, type Project } from '@/lib/api'
+import { BranchSelect } from './BranchSelect'
 
 // docs/003-Domain.md / docs/005-Agents.md §7 - founder-requested: each project's repo
 // link and shared memory must be editable in one place, not scattered across raw API
@@ -154,7 +155,7 @@ export function ProjectEditDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="proj-branch">Root branch</Label>
-            <Input id="proj-branch" value={rootBranch} onChange={(e) => setRootBranch(e.target.value)} />
+            <BranchSelect id="proj-branch" repositoryUrl={repositoryUrl} value={rootBranch} onChange={setRootBranch} />
           </div>
 
           <div className="flex flex-col gap-1.5">

@@ -1,6 +1,5 @@
 import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -36,27 +35,22 @@ export function TaskCard({
       ref={setNodeRef}
       style={style}
       onClick={() => onOpen(task.id)}
+      {...(draggable ? attributes : {})}
+      {...(draggable ? listeners : {})}
       className={cn(
+        // The whole card is the drag surface now (founder-reported: the old
+        // hover-only grip icon was too small/undiscoverable to reliably grab, and
+        // its reserved layout space made these columns' text visibly more indented
+        // than every other column). A plain click still opens the task - dnd-kit's
+        // activation distance (App.tsx) tells a click from a drag before either fires.
         'group cursor-pointer gap-1.5 border-border/60 bg-card/60 p-2 shadow-sm transition-all hover:border-border hover:shadow-md',
+        draggable && 'cursor-grab touch-none active:cursor-grabbing',
         isDragging && 'z-10 opacity-50 shadow-lg',
       )}
     >
-      <div className="flex items-start gap-1.5">
-        {draggable && (
-          <button
-            {...attributes}
-            {...listeners}
-            onClick={(e) => e.stopPropagation()}
-            className="mt-0.5 shrink-0 cursor-grab touch-none text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
-            aria-label="Drag to move"
-          >
-            <GripVertical className="size-3.5" />
-          </button>
-        )}
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-mono text-[9px] font-medium text-muted-foreground/70">{tag}</span>
-          <p className="text-xs leading-snug text-foreground">{task.title}</p>
-        </div>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="font-mono text-[9px] font-medium text-muted-foreground/70">{tag}</span>
+        <p className="text-xs leading-snug text-foreground">{task.title}</p>
       </div>
 
       {config.spin && (

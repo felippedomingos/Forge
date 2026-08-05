@@ -21,6 +21,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
+import { BranchSelect } from './BranchSelect'
 
 // docs/003-Domain.md §1 / docs/012-API.md - closes the "no UI to create a project" gap.
 // `prefix` and the git provider plugin are required up front (prefix is immutable once
@@ -112,7 +113,12 @@ export function CreateProjectDialog() {
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="new-proj-branch">Root branch</Label>
-            <Input id="new-proj-branch" value={rootBranch} onChange={(e) => setRootBranch(e.target.value)} />
+            <BranchSelect
+              id="new-proj-branch"
+              repositoryUrl={repositoryUrl}
+              value={rootBranch}
+              onChange={setRootBranch}
+            />
           </div>
 
           <div className="flex flex-col gap-1.5">

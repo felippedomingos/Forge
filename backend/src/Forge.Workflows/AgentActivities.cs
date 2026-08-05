@@ -498,10 +498,39 @@ public static class AgentActivities
         return new DeployResult(success, success ? null : Truncate(stderr, 500));
     }
 
-    // docs/005-Agents.md §6 - push + PR creation via the GitHub plugin (ADR-0002).
-    // Uses the `gh` CLI directly rather than GitHub's REST API - consistent with this
-    // whole pass's "subprocess over SDK" shape (ClaudeCliProvider, GitOps). Only
-    // implementation for GitHub per ADR-0002; Azure DevOps would need its own.
+    // docs/005-Agents.md §6 - push + PR creation. Branches on the Project's
+    // GitProviderPlugin (GitHub via `gh`, or Azure DevOps via `az repos pr create` -
+    // docs/010-Plugins.md §5) rather than a real IGitProviderPlugin implementation -
+    // neither provider actually goes through that interface, it's inline subprocess
+    // calls for both, consistent with this whole pass's shape (ClaudeCliProvider,
+    // GitOps). The Azure DevOps path is unvalidated against a real org/repo - built
+    // correctly against `az repos pr create`'s documented shape, but not exercised
+    // live the way the GitHub path was (docs/015-Deployment.md's own validated-live
+    // findings are all GitHub).
+    // docs/010-Plugins.md §5 - explicit org/project/repo derived from the Project's own
+    // RepositoryUrl (GitOps.TryParseAzureRepo) rather than the machine-wide `az devops
+    // configure -d` default, which is correct for exactly one Azure DevOps project at
+    // a time and silently wrong for a second one.
+    private static async Task<GitCommandResult> CreateAzureDevOpsPrAsync(string worktreePath, Project project, TaskItem task)
+    {
+        var args = new List<string>
+        {
+            "repos", "pr", "create",
+            "--title", task.Title,
+            "--source-branch", task.BranchName!,
+            "--target-branch", project.RootBranch,
+        };
+
+        if (GitOps.TryParseAzureRepo(project.RepositoryUrl) is { } repo)
+        {
+            args.AddRange(["--organization", $"https://dev.azure.com/{repo.Organization}"]);
+            args.AddRange(["--project", repo.Project]);
+            args.AddRange(["--repository", repo.Repository]);
+        }
+
+        return await GitOps.RunAzAsync(worktreePath, args.ToArray());
+    }
+
     [Activity]
     public static async Task GitFinalizeAsync(Guid taskId)
     {
@@ -523,14 +552,17 @@ public static class AgentActivities
             return;
         }
 
+        var project = await db.Projects.Include(p => p.GitProviderPlugin).FirstOrDefaultAsync(p => p.Id == task.ProjectId);
+
         var push = await GitOps.RunAsync(worktreePath, "push", "-u", "origin", task.BranchName);
         await RecordEventAsync(db, taskId, "GitPushed", AgentRole.Git,
             new { branch = task.BranchName, success = push.Success, stderr = push.Success ? null : push.Stderr });
 
         if (push.Success)
         {
-            var pr = await GitOps.RunGhAsync(worktreePath,
-                "pr", "create", "--fill", "--head", task.BranchName);
+            var pr = project?.GitProviderPlugin?.Name == "azure-devops"
+                ? await CreateAzureDevOpsPrAsync(worktreePath, project, task)
+                : await GitOps.RunGhAsync(worktreePath, "pr", "create", "--fill", "--head", task.BranchName);
             await RecordEventAsync(db, taskId, "PRCreated", AgentRole.Git,
                 new { success = pr.Success, output = pr.Success ? pr.Stdout.Trim() : pr.Stderr.Trim() });
         }
@@ -539,7 +571,6 @@ public static class AgentActivities
         // remove` must run from the canonical clone, not the worktree being removed.
         // A FORCED removal (uncommitted changes present) is deliberately NOT something
         // an agent does unattended - that's in the project's permission "ask" list.
-        var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == task.ProjectId);
         if (project?.LocalPath is { } localPath && Directory.Exists(localPath))
         {
             var remove = await GitOps.RunAsync(localPath, "worktree", "remove", worktreePath);

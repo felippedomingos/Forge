@@ -1,6 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { DndContext, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core'
 import { Flame } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,6 +25,13 @@ function Board() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all')
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [draggingFromState, setDraggingFromState] = useState<TaskState | null>(null)
+  // Founder-reported: drag-and-drop wasn't working. Root cause: the whole card had no
+  // drag listeners at all - only a tiny, hover-only grip icon did, and it reserved
+  // inconsistent layout space besides (see TaskCard.tsx). Moving listeners to the
+  // whole card requires an activation distance here, or a plain click-to-open would
+  // misfire as a drag on the slightest pointer jitter - 8px lets dnd-kit tell a real
+  // drag gesture from a click before either fires.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
 
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: api.listProjects })
   // 2s polling stands in for the WebSocket trace (docs/007-ExecutionEngine.md §4) so
@@ -113,7 +127,7 @@ function Board() {
             </p>
           </div>
         ) : (
-          <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             {/* Founder feedback: all 10 columns fit on screen, no horizontal scroll -
                 an even grid instead of a scrolling flex row. */}
             <div className="grid flex-1 grid-cols-10 gap-2 overflow-hidden p-4">

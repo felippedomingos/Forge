@@ -128,6 +128,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   listProjects: () => request<Project[]>('/projects'),
   listPlugins: () => request<Plugin[]>('/plugins'),
+  // Founder-requested: list a repo's actual branches instead of guessing at common
+  // names - provider-agnostic (`git ls-remote` under the hood, works the same for
+  // GitHub/Azure DevOps/anything else). Throws (via `request`'s !res.ok check) on an
+  // unreachable/invalid URL - callers should treat that as "fall back to manual entry."
+  listBranches: (repositoryUrl: string) =>
+    request<{ branches: string[] }>(`/git/branches?repositoryUrl=${encodeURIComponent(repositoryUrl)}`),
   getProject: (projectId: string) => request<Project>(`/projects/${projectId}`),
   createProject: (input: {
     name: string
