@@ -13,6 +13,11 @@ public class TaskItem
     public string? Description { get; set; }
     public TaskState State { get; set; } = TaskState.Inbox;
     public int? Priority { get; set; }
+    // Set by PATCH /tasks/{id}/priority (Product Owner override, docs/000-Vision.md's
+    // Product Owner persona) - tells AgentActivities.PrioritizeAsync to leave this
+    // task's Priority alone on its next run instead of overwriting it with a fresh
+    // FIFO/LLM ranking, per docs/006-Scheduler.md.
+    public bool PriorityManuallySet { get; set; }
     public string? BranchName { get; set; }
     // Set by AgentActivities.GitFinalizeAsync once the PR is actually created (at
     // Review->Done, docs/003-Domain.md row 9->row10's GitFinalizeAsync call) - lets
