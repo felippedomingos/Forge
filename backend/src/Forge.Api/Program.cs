@@ -39,11 +39,15 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 // Local dev only: lets the Vite dev server (localhost:5173) call this API directly
-// when not going through the /api proxy. Tightened before any real deployment
-// per docs/014-Security.md (not yet written).
+// when not going through the /api proxy. Configurable via FORGE_CORS_ORIGIN since a
+// containerized deployment's frontend origin isn't known at build time; irrelevant for
+// the frontend's own nginx-proxied /api calls (same-origin, no CORS involved) but still
+// needed for direct API access during development. Tightened further before any real
+// public deployment per docs/014-Security.md (not yet written).
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
-        policy.WithOrigins("http://localhost:5173").AllowAnyHeader().AllowAnyMethod()));
+        policy.WithOrigins(Environment.GetEnvironmentVariable("FORGE_CORS_ORIGIN") ?? "http://localhost:5173")
+            .AllowAnyHeader().AllowAnyMethod()));
 
 // docs/002-Architecture.md §1: the API is a thin control plane - no lifecycle logic here,
 // that lives in the Temporal workflow (Forge.Workflows / Forge.Worker). This DbContext is
@@ -107,6 +111,14 @@ builder.Services.AddAuthorization(options =>
         .Build());
 
 var app = builder.Build();
+
+// Applies pending EF Core migrations on startup so a fresh `docker compose up -d`
+// doesn't need a separate manual `dotnet ef database update` step - the API is the
+// only process here that owns the `forge` schema (docs/011-Database.md §4).
+using (var scope = app.Services.CreateScope())
+{
+    await scope.ServiceProvider.GetRequiredService<ForgeDbContext>().Database.MigrateAsync();
+}
 
 app.UseCors();
 app.UseWebSockets();

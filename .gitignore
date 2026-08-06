@@ -9,3 +9,7 @@ obj/
 
 # OS
 .DS_Store
+
+# Docker Compose local config/data (docker-compose.yml, .env.example)
+.env
+/data/

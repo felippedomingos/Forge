@@ -52,7 +52,7 @@ Already established as a principle in [[000-Vision]] §5 and made concrete by [[
 
 ## 4. Deployment Topology
 
-**MVP (current, per the [[ADR-0004]] amendment):** every component runs as Docker containers on a single Linux machine — Postgres, Temporal, Temporal UI (already running, see `docker/local/`), plus the Forge API, Frontend and Worker process(es) to be added as they're built. Single-node, single-database-instance.
+**MVP (current, per the [[ADR-0004]] amendment):** every component runs as Docker containers on a single Linux machine, all 6 defined in the root `docker-compose.yml` — Postgres, Temporal, Temporal UI, Forge API, Worker, and Frontend (see [[015-Deployment]] §1). Single-node, single-database-instance.
 
 **Post-MVP (v3 per [[016-Roadmap]]):** multiple Worker processes across multiple hosts, coordinated entirely through Temporal's task queues — a Worker is stateless with respect to *which* tasks it picks up, so horizontal scaling is adding more Worker processes pointed at the same Temporal server, not a rearchitecture.
 

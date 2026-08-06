@@ -245,7 +245,8 @@ public static class AgentActivities
     }
 
     private static string WorktreesRootDir =>
-        Environment.GetEnvironmentVariable("FORGE_WORKTREES_DIR") ?? "/home/felippe/forge-worktrees";
+        Environment.GetEnvironmentVariable("FORGE_WORKTREES_DIR")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "forge-worktrees");
 
     // docs/005-Agents.md §4. Real implementation: sync root branch, create/reuse
     // worktree (docs/007-ExecutionEngine.md §2), then run the same ClaudeCliProvider
