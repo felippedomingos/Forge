@@ -2,19 +2,59 @@
 
 > AI-native Software Development Factory
 
-Forge is an AI-native software engineering platform that transforms a Kanban board into a fully autonomous software factory.
+Forge is an AI-native software engineering platform that turns a Kanban board into a working software factory. A task goes in as just a title; five Claude-driven agents plan it, write the code, deploy it and open the pull request, with a human approving at the gates that matter.
 
-Instead of treating AI as a coding assistant, Forge orchestrates specialized agents that understand requirements, plan work, write code, execute tests, deploy applications and manage the entire software development lifecycle.
-
-Developers remain in control while autonomous agents execute repetitive and time-consuming work.
+This isn't a prototype — Forge has been dogfooding itself: real tasks run end-to-end through the full pipeline (title in, real PR out) against both a sandbox repo and Forge's own codebase.
 
 ---
 
-## Vision
+## How it works
 
-Software development is evolving from manually writing code to supervising autonomous engineering teams.
+A `Task` moves through a 10-state board — `Inbox → Backlog → Blocked → Todo → Executing → AwaitingPublish → Publishing → Review → Done → Production` — driven by [Temporal](https://temporal.io) workflows, not polling or cron. Every transition is either a human moving a card, deterministic scheduler logic, or one of five agent roles producing a domain event. The full state machine, its events and its failure/rollback edges are specified in [`docs/003-Domain.md`](docs/003-Domain.md) and [`docs/004-Workflow.md`](docs/004-Workflow.md).
 
-Forge provides the orchestration layer that coordinates these AI workers.
+### The five agents
+
+All five run against Claude through the [Claude Code CLI](docs/adr/ADR-0005-claude-code-cli-as-invocation-mechanism.md) (not the raw Anthropic API), each owning exactly one lifecycle transition:
+
+- **Planner** — turns a title (plus optional seed notes/URLs) into a description and acceptance criteria, or raises genuine clarifying questions instead of guessing.
+- **Prioritizer** — ranks a project's `Backlog` so the scheduler knows what to promote next.
+- **Developer** — works inside a real Git worktree: reads the project, writes code, runs builds/tests, commits locally.
+- **Deploy** — runs the project's `PublishRecipe` (migration, restart, health check) against the task's branch.
+- **Git** — pushes the branch and opens a real pull request (`gh pr create` / `az repos pr create`), then cleans up the worktree.
+
+Details, inputs/outputs and failure handling for each role: [`docs/005-Agents.md`](docs/005-Agents.md).
+
+### Execution model
+
+- **Temporal** is the workflow engine: task state, scheduling and long-running orchestration all live as real Temporal workflows/activities, not application-layer state machines — see [`docs/adr/ADR-0001-temporal-as-workflow-engine.md`](docs/adr/ADR-0001-temporal-as-workflow-engine.md).
+- Each task that reaches `Executing` gets a **real, isolated Git worktree** — the Developer and Deploy agents operate on an actual checkout, not a simulated sandbox.
+- A per-project `BacklogSchedulerWorkflow` polls for a free worker slot and promotes the top-priority `Backlog` task automatically.
+- Once a task reaches `Done`, `TaskWorkflow` polls the PR it opened (`gh pr view` / `az repos pr show`) and advances the task to `Production` once it's merged — no webhook required.
+
+---
+
+## What's implemented today
+
+- **Kanban board** — full read + the human-gated actions (answer questions, request publish, approve review, request rework), drag-and-drop, project sidebar/tree, cross-project view, task tags (`FORGE-42`), light/dark theme.
+- **Live execution timeline** — every agent step (file read, command run, reasoning checkpoint) streams to the UI over **WebSocket**, backed by Postgres `LISTEN`/`NOTIFY`, with sub-second delivery.
+- **Git providers** — **GitHub** (validated live: real pushes, real PRs) and **Azure DevOps** (`az repos pr create`, implemented and selectable per project) as swappable providers.
+- **Authentication** — JWT bearer auth, admin-created accounts only (no public signup), a self-disabling bootstrap endpoint for the first account, WebSocket auth via token. See [`docs/014-Security.md`](docs/014-Security.md).
+- **User management** — an Admin-only UI to list/create/edit users and roles, plus a change-password flow available to any logged-in user.
+- **Cost tracking** — per-task and global rolled-up token usage/cost estimate from real `Run` rows, surfaced as a spend indicator in the UI (`GET /tasks/{id}/cost`, `GET /cost`).
+- **Per-project shared memory** — a simple key/value store of conventions/decisions agents should know about a project, editable directly from the UI.
+- **Self-hosted restart** — `scripts/restart-forge-dev.sh`, invoked by the Deploy agent's `restartTargets`, restarts Forge's own API/frontend processes (and can health-check the result) without touching the Worker process it runs inside of.
+- **Trust gating** — `Project.AllowAgentBypassPermissions` (off by default) gates every agent operation that writes files or runs shell commands, so a new project can't execute arbitrary commands until explicitly marked trusted.
+
+For the authoritative, evidence-based account of what's done vs. what's next, see [`docs/016-Roadmap.md`](docs/016-Roadmap.md) — it's updated from what's actually been run live, not from what's planned.
+
+---
+
+## Stack
+
+- **Backend**: .NET 10 (`Forge.Api`, `Forge.Workflows`, `Forge.Worker`), Temporal, PostgreSQL.
+- **Frontend**: React 19, Vite, TypeScript, Tailwind CSS.
+- **Agents**: Claude via the Claude Code CLI.
+- **Infrastructure (current)**: Docker Compose on a single Linux machine (`docker/local/`) — dedicated infrastructure is a planned v2 step, not yet built ([`docs/adr/ADR-0004-dedicated-infrastructure.md`](docs/adr/ADR-0004-dedicated-infrastructure.md)).
 
 ---
 
@@ -26,48 +66,16 @@ Forge provides the orchestration layer that coordinates these AI workers.
 - Human approval where it matters
 - Git-native
 - Linux-first
-- Multi-model AI
+- Multi-model AI (single provider today, router designed for more — see [`docs/008-ModelRouter.md`](docs/008-ModelRouter.md))
 - Plugin-based architecture
 - Transparent execution
 - Complete audit trail
 
 ---
 
-## Planned Features
-
-- Kanban board
-- Autonomous planning agent
-- Coding agent
-- Deployment agent
-- Review agent
-- Git automation
-- Worktree management
-- Multi-LLM routing
-- MCP integration
-- Azure DevOps integration
-- GitHub integration
-- Docker support
-- Local execution
-- Live execution timeline
-- Prompt history
-- Cost tracking
-- Plugin SDK
-
----
-
-## Project Status
-
-⚠️ Early architecture phase.
-
-The repository currently contains specifications and architectural documents.
-
-Implementation will begin after the architecture is finalized.
-
----
-
 ## Documentation
 
-The project documentation is available under [`/docs`](docs/), following a phased specification process — architecture is settled before implementation begins.
+The project documentation lives under [`/docs`](docs/) and is the source of truth for anything not covered above — this README is an entry point, not a replacement for it.
 
 - [000 — Vision](docs/000-Vision.md)
 - [001 — Requirements](docs/001-Requirements.md)
@@ -91,16 +99,6 @@ The project documentation is available under [`/docs`](docs/), following a phase
 
 ---
 
-## Roadmap
+## Status
 
-- [ ] Product Vision
-- [ ] Requirements
-- [ ] Domain Model
-- [ ] Architecture
-- [ ] Workflow Engine
-- [ ] Scheduler
-- [ ] Backend
-- [ ] Frontend
-- [ ] Worker Runtime
-- [ ] Plugin SDK
-- [ ] v1.0
+The MVP described in [`docs/016-Roadmap.md`](docs/016-Roadmap.md) is substantially complete: all five agents, the full state machine, both Git providers, auth, user management, cost tracking and the self-hosted restart path have been validated live, end-to-end. What's left is mostly hardening (finer-grained trust scoping, broader `Event.Actor` attribution, Azure DevOps exercised against a real org) and infrastructure work (moving off the founder's local machine onto dedicated infrastructure) rather than missing features — see the roadmap doc for the current, evidence-based punch list.
