@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   useSensor,
   useSensors,
@@ -20,6 +21,7 @@ import {
 } from '@/components/ui/select'
 import { CreateTaskDialog } from '@/components/board/CreateTaskDialog'
 import { BoardColumn } from '@/components/board/BoardColumn'
+import { TaskCardOverlay } from '@/components/board/TaskCard'
 import { TaskDetailSheet } from '@/components/board/TaskDetailSheet'
 import { ProjectSidebar } from '@/components/board/ProjectSidebar'
 import { LoginScreen } from '@/components/auth/LoginScreen'
@@ -38,6 +40,10 @@ function Board({ user }: { user: AuthUser }) {
   const [selectedTagId, setSelectedTagId] = useState<string>('all')
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [draggingFromState, setDraggingFromState] = useState<TaskState | null>(null)
+  // The id of the task currently being dragged, if any - drives <DragOverlay> below
+  // (docs: overlay renders outside BoardColumn's clipped, overflow-y-auto container
+  // so the card stays visible while dragged across columns instead of being clipped).
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   // Founder-reported: drag-and-drop wasn't working. Root cause: the whole card had no
   // drag listeners at all - only a tiny, hover-only grip icon did, and it reserved
   // inconsistent layout space besides (see TaskCard.tsx). Moving listeners to the
@@ -96,10 +102,12 @@ function Board({ user }: { user: AuthUser }) {
 
   const handleDragStart = (event: DragStartEvent) => {
     setDraggingFromState((event.active.data.current?.state as TaskState) ?? null)
+    setActiveTaskId(event.active.id as string)
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
     setDraggingFromState(null)
+    setActiveTaskId(null)
     const sourceState = event.active.data.current?.state as TaskState | undefined
     const targetState = event.over?.id as TaskState | undefined
     const taskId = event.active.id as string
@@ -115,6 +123,13 @@ function Board({ user }: { user: AuthUser }) {
     else if (sourceState === 'AwaitingPublish') publish.mutate(taskId)
     else if (sourceState === 'Review') approve.mutate(taskId)
   }
+
+  const handleDragCancel = () => {
+    setDraggingFromState(null)
+    setActiveTaskId(null)
+  }
+
+  const activeTask = activeTaskId ? tasks.find((t) => t.id === activeTaskId) : undefined
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId)
 
@@ -180,7 +195,12 @@ function Board({ user }: { user: AuthUser }) {
             </p>
           </div>
         ) : (
-          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+          >
             {/* Founder feedback: all 10 columns fit on screen, no horizontal scroll -
                 an even grid instead of a scrolling flex row. */}
             <div className="grid min-h-0 flex-1 grid-cols-10 gap-2 overflow-hidden p-4">
@@ -196,6 +216,23 @@ function Board({ user }: { user: AuthUser }) {
                 />
               ))}
             </div>
+            {/* Founder-reported: dragging felt like holding an empty space and drops
+                were imprecise. Root cause: without a DragOverlay, the dragged
+                TaskCard was translated in place inside BoardColumn's
+                overflow-y-auto container - CSS clips overflow-x too once
+                overflow-y is set, so the card visually vanished as soon as it
+                crossed its origin column's horizontal bounds. Rendering the
+                active card here instead keeps it above every column, unclipped,
+                for the whole gesture. */}
+            <DragOverlay>
+              {activeTask ? (
+                <TaskCardOverlay
+                  task={activeTask}
+                  tag={`${prefixByProjectId[activeTask.projectId] ?? '?'}-${activeTask.number}`}
+                  color={colorByProjectId[activeTask.projectId] ?? '#E5E7EB'}
+                />
+              ) : null}
+            </DragOverlay>
           </DndContext>
         )}
       </div>
