@@ -3,6 +3,7 @@ using System;
 using Forge.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Forge.Infrastructure.Migrations
 {
     [DbContext(typeof(ForgeDbContext))]
-    partial class ForgeDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260806144936_AddProjectColor")]
+    partial class AddProjectColor
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -222,10 +225,6 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("local_path");
 
-                    b.Property<int>("MaxConcurrentExecuting")
-                        .HasColumnType("integer")
-                        .HasColumnName("max_concurrent_executing");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text")
@@ -360,41 +359,6 @@ namespace Forge.Infrastructure.Migrations
                     b.ToTable("sub_tasks", (string)null);
                 });
 
-            modelBuilder.Entity("Forge.Domain.Entities.Tag", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<string>("Color")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("color");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("name");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("project_id");
-
-                    b.HasKey("Id")
-                        .HasName("pk_tags");
-
-                    b.HasIndex("ProjectId", "Name")
-                        .IsUnique()
-                        .HasDatabaseName("ix_tags_project_id_name");
-
-                    b.ToTable("tags", (string)null);
-                });
-
             modelBuilder.Entity("Forge.Domain.Entities.TaskItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -421,10 +385,6 @@ namespace Forge.Infrastructure.Migrations
                     b.Property<int?>("Priority")
                         .HasColumnType("integer")
                         .HasColumnName("priority");
-
-                    b.Property<bool>("PriorityManuallySet")
-                        .HasColumnType("boolean")
-                        .HasColumnName("priority_manually_set");
 
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("uuid")
@@ -595,25 +555,6 @@ namespace Forge.Infrastructure.Migrations
                     b.ToTable("worktrees", (string)null);
                 });
 
-            modelBuilder.Entity("TagTaskItem", b =>
-                {
-                    b.Property<Guid>("TagsId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("tags_id");
-
-                    b.Property<Guid>("TasksId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("tasks_id");
-
-                    b.HasKey("TagsId", "TasksId")
-                        .HasName("pk_task_tags");
-
-                    b.HasIndex("TasksId")
-                        .HasDatabaseName("ix_task_tags_tasks_id");
-
-                    b.ToTable("task_tags", (string)null);
-                });
-
             modelBuilder.Entity("Forge.Domain.Entities.AcceptanceCriterion", b =>
                 {
                     b.HasOne("Forge.Domain.Entities.TaskItem", "Task")
@@ -643,7 +584,6 @@ namespace Forge.Infrastructure.Migrations
                     b.HasOne("Forge.Domain.Entities.TaskItem", "Task")
                         .WithMany("Events")
                         .HasForeignKey("TaskId")
-                        .OnDelete(DeleteBehavior.Cascade)
                         .HasConstraintName("fk_events_tasks_task_id");
 
                     b.Navigation("Task");
@@ -685,18 +625,6 @@ namespace Forge.Infrastructure.Migrations
                     b.Navigation("Task");
                 });
 
-            modelBuilder.Entity("Forge.Domain.Entities.Tag", b =>
-                {
-                    b.HasOne("Forge.Domain.Entities.Project", "Project")
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_tags_projects_project_id");
-
-                    b.Navigation("Project");
-                });
-
             modelBuilder.Entity("Forge.Domain.Entities.TaskItem", b =>
                 {
                     b.HasOne("Forge.Domain.Entities.Project", "Project")
@@ -709,7 +637,6 @@ namespace Forge.Infrastructure.Migrations
                     b.HasOne("Forge.Domain.Entities.Worktree", "Worktree")
                         .WithOne()
                         .HasForeignKey("Forge.Domain.Entities.TaskItem", "WorktreeId")
-                        .OnDelete(DeleteBehavior.SetNull)
                         .HasConstraintName("fk_tasks_worktrees_worktree_id");
 
                     b.Navigation("Project");
@@ -746,23 +673,6 @@ namespace Forge.Infrastructure.Migrations
                     b.Navigation("Project");
 
                     b.Navigation("Task");
-                });
-
-            modelBuilder.Entity("TagTaskItem", b =>
-                {
-                    b.HasOne("Forge.Domain.Entities.Tag", null)
-                        .WithMany()
-                        .HasForeignKey("TagsId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_task_tags_tags_tags_id");
-
-                    b.HasOne("Forge.Domain.Entities.TaskItem", null)
-                        .WithMany()
-                        .HasForeignKey("TasksId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_task_tags_tasks_tasks_id");
                 });
 
             modelBuilder.Entity("Forge.Domain.Entities.Project", b =>

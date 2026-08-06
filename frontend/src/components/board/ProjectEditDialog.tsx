@@ -17,6 +17,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api, parsePublishRecipe, type Project } from '@/lib/api'
+import { PROJECT_COLOR_PALETTE } from '@/lib/project-colors'
+import { cn } from '@/lib/utils'
 import { BranchSelect } from './BranchSelect'
 
 // docs/003-Domain.md / docs/005-Agents.md §7 - founder-requested: each project's repo
@@ -44,6 +46,7 @@ export function ProjectEditDialog({
   const [localPath, setLocalPath] = useState(project.localPath ?? '')
   const [previewUrl, setPreviewUrl] = useState(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
   const [allowBypass, setAllowBypass] = useState(project.allowAgentBypassPermissions)
+  const [color, setColor] = useState(project.color)
   const [maxConcurrentExecuting, setMaxConcurrentExecuting] = useState(String(project.maxConcurrentExecuting))
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
@@ -57,6 +60,7 @@ export function ProjectEditDialog({
     setLocalPath(project.localPath ?? '')
     setPreviewUrl(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
     setAllowBypass(project.allowAgentBypassPermissions)
+    setColor(project.color)
     setMaxConcurrentExecuting(String(project.maxConcurrentExecuting))
     setConfirmingDelete(false)
   }, [open, project])
@@ -84,6 +88,7 @@ export function ProjectEditDialog({
         rootBranch,
         localPath: localPath || null,
         allowAgentBypassPermissions: allowBypass,
+        color,
         maxConcurrentExecuting: parsedMaxConcurrentExecuting,
       }),
     onSuccess: () => {
@@ -183,6 +188,32 @@ export function ProjectEditDialog({
               value={localPath}
               onChange={(e) => setLocalPath(e.target.value)}
             />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Color</Label>
+            <p className="text-xs text-muted-foreground">
+              Shown as a swatch in the sidebar and tints this project's cards on the
+              board. Restricted to a fixed pastel palette — no free-form hex.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {PROJECT_COLOR_PALETTE.map((swatch) => (
+                <button
+                  key={swatch}
+                  type="button"
+                  onClick={() => setColor(swatch)}
+                  aria-label={`Use color ${swatch}`}
+                  aria-pressed={color === swatch}
+                  className={cn(
+                    'size-6 rounded-full border-2 transition-transform',
+                    color === swatch
+                      ? 'border-foreground scale-110'
+                      : 'border-transparent hover:scale-105',
+                  )}
+                  style={{ backgroundColor: swatch }}
+                />
+              ))}
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5">

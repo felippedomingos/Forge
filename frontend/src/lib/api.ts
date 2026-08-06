@@ -32,6 +32,9 @@ export interface Project {
   // simplified to one flag): Developer/Deploy refuse to touch the filesystem/shell
   // for this project's tasks unless it's true - see AgentActivities on the backend.
   allowAgentBypassPermissions: boolean
+  // Always one of PROJECT_COLOR_PALETTE (lib/project-colors.ts) - auto-assigned at
+  // creation, never null/free-form. See Project.Color on the backend.
+  color: string
   // docs/006-Scheduler.md §2 - per-project cap on how many of this project's tasks
   // BacklogSchedulerWorkflow lets sit in Executing at once. Backend default is 2;
   // once the cap is hit, the next Backlog task just waits for a slot (no UX change
@@ -206,7 +209,13 @@ export const api = {
     patch: Partial<
       Pick<
         Project,
-        'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions' | 'maxConcurrentExecuting'
+        | 'name'
+        | 'repositoryUrl'
+        | 'rootBranch'
+        | 'localPath'
+        | 'allowAgentBypassPermissions'
+        | 'color'
+        | 'maxConcurrentExecuting'
       >
     >,
   ) =>
