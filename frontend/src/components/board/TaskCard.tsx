@@ -3,22 +3,30 @@ import { CSS } from '@dnd-kit/utilities'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { useTheme } from '@/lib/useTheme'
+import { hexToRgba } from '@/lib/project-colors'
 import { STATE_CONFIG } from '@/lib/state-config'
 import type { TaskItem } from '@/lib/api'
 
 export function TaskCard({
   task,
   tag,
+  color,
   onOpen,
 }: {
   task: TaskItem
   // "{ProjectPrefix}-{Number}" (e.g. "FORGE-42") - founder-requested, so a task can be
   // referenced in conversation without pasting a raw GUID.
   tag: string
+  // The owning Project's pastel color (Project.color) - tints the card background
+  // instead of the old fixed bg-card/60, so a task's project is identifiable at a
+  // glance on the board, not just in the sidebar.
+  color: string
   onOpen: (id: string) => void
 }) {
   const config = STATE_CONFIG[task.state]
   const draggable = Boolean(config.dragTarget)
+  const { theme } = useTheme()
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
@@ -26,9 +34,14 @@ export function TaskCard({
     disabled: !draggable,
   })
 
-  const style = transform
-    ? { transform: CSS.Translate.toString(transform) }
-    : undefined
+  const style = {
+    ...(transform ? { transform: CSS.Translate.toString(transform) } : {}),
+    // Pastel swatches read fine at full strength on the light theme's white cards but
+    // wash out the dark theme's own contrast - a lighter tint in dark mode keeps the
+    // card readable while still carrying the project's color. Text stays on
+    // text-foreground/text-muted-foreground below, which already adapt per theme.
+    backgroundColor: hexToRgba(color, theme === 'dark' ? 0.16 : 0.45),
+  }
 
   return (
     <Card
@@ -43,7 +56,7 @@ export function TaskCard({
         // its reserved layout space made these columns' text visibly more indented
         // than every other column). A plain click still opens the task - dnd-kit's
         // activation distance (App.tsx) tells a click from a drag before either fires.
-        'group cursor-pointer gap-1.5 border-border/60 bg-card/60 p-2 shadow-sm transition-all hover:border-border hover:shadow-md',
+        'group cursor-pointer gap-1.5 border-border/60 p-2 shadow-sm transition-all hover:border-border hover:shadow-md',
         draggable && 'cursor-grab touch-none active:cursor-grabbing',
         isDragging && 'z-10 opacity-50 shadow-lg',
       )}

@@ -280,6 +280,11 @@ app.MapGet("/git/branches", async (string repositoryUrl) =>
 
 app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, CreateProjectRequest request) =>
 {
+    // Founder-requested: no client-supplied color - every project auto-gets a pastel
+    // one from the fixed palette. Round-robin off the current project count (same
+    // deterministic-round-robin idea the AddProjectColor migration uses to backfill
+    // existing rows) so a fresh install doesn't hand every project the same swatch.
+    var projectCount = await db.Projects.CountAsync();
     var project = new Project
     {
         Id = Guid.NewGuid(),
@@ -290,6 +295,7 @@ app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, Crea
         GitProviderPluginId = request.GitProviderPluginId,
         LocalPath = string.IsNullOrWhiteSpace(request.LocalPath) ? null : request.LocalPath,
         AllowAgentBypassPermissions = request.AllowAgentBypassPermissions,
+        Color = ProjectColorPalette.Colors[projectCount % ProjectColorPalette.Colors.Count],
         CreatedAt = DateTimeOffset.UtcNow
     };
     db.Projects.Add(project);
@@ -322,6 +328,16 @@ app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdatePro
     if (request.RootBranch is not null) project.RootBranch = request.RootBranch;
     if (request.LocalPath is not null) project.LocalPath = request.LocalPath;
     if (request.AllowAgentBypassPermissions is { } allowBypass) project.AllowAgentBypassPermissions = allowBypass;
+    // Restricted to the fixed pastel palette - never a free-form hex, so a saturated
+    // color can't sneak in through the edit dialog either. Rejected outright rather
+    // than silently ignored, so the UI can surface the mistake instead of the color
+    // quietly not changing.
+    if (request.Color is not null)
+    {
+        if (!ProjectColorPalette.IsValid(request.Color))
+            return Results.BadRequest(new { error = $"'{request.Color}' is not one of the predefined project colors." });
+        project.Color = request.Color;
+    }
     await db.SaveChangesAsync();
     return Results.Ok(project);
 });
@@ -681,7 +697,7 @@ app.Run();
 // docs/012-API.md §2 request shapes - kept next to Program.cs at this skeleton stage,
 // move to their own files once the API grows past this first slice.
 record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath, bool AllowAgentBypassPermissions = false);
-record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath, bool? AllowAgentBypassPermissions);
+record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath, bool? AllowAgentBypassPermissions, string? Color);
 // Description is optional, user-provided seed context at creation time (may include a
 // link) - distinct from the Planner-authored Task.Description that AgentActivities.
 // PlanAsync overwrites once it finishes (docs/005-Agents.md §2). Not the same field

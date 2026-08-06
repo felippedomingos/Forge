@@ -41,6 +41,11 @@ public class Project
     // Defaults false: a newly created project has to be explicitly marked trusted
     // before an agent can run destructive operations against it.
     public bool AllowAgentBypassPermissions { get; set; }
+    // Founder-requested: every project needs a color, always pastel, so it's visually
+    // distinguishable in the sidebar/board without depending solely on its name. Never
+    // free-form - restricted to ProjectColorPalette.Colors both at creation (auto-assigned)
+    // and on edit (PATCH /projects/{id} rejects anything outside the palette).
+    public required string Color { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
     public Plugin? GitProviderPlugin { get; set; }

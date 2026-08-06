@@ -32,6 +32,9 @@ export interface Project {
   // simplified to one flag): Developer/Deploy refuse to touch the filesystem/shell
   // for this project's tasks unless it's true - see AgentActivities on the backend.
   allowAgentBypassPermissions: boolean
+  // Always one of PROJECT_COLOR_PALETTE (lib/project-colors.ts) - auto-assigned at
+  // creation, never null/free-form. See Project.Color on the backend.
+  color: string
   createdAt: string
 }
 
@@ -171,7 +174,10 @@ export const api = {
   updateProject: (
     projectId: string,
     patch: Partial<
-      Pick<Project, 'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions'>
+      Pick<
+        Project,
+        'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions' | 'color'
+      >
     >,
   ) =>
     request<Project>(`/projects/${projectId}`, {

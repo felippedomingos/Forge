@@ -59,6 +59,10 @@ function Board({ user }: { user: AuthUser }) {
     () => Object.fromEntries(projects.map((p) => [p.id, p.prefix])),
     [projects],
   )
+  const colorByProjectId = useMemo(
+    () => Object.fromEntries(projects.map((p) => [p.id, p.color])),
+    [projects],
+  )
   const taskCountByProject = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const t of allTasks) counts[t.projectId] = (counts[t.projectId] ?? 0) + 1
@@ -142,6 +146,7 @@ function Board({ user }: { user: AuthUser }) {
                   onOpenTask={setOpenTaskId}
                   draggingFromState={draggingFromState}
                   prefixByProjectId={prefixByProjectId}
+                  colorByProjectId={colorByProjectId}
                 />
               ))}
             </div>
