@@ -32,6 +32,11 @@ export interface Project {
   // simplified to one flag): Developer/Deploy refuse to touch the filesystem/shell
   // for this project's tasks unless it's true - see AgentActivities on the backend.
   allowAgentBypassPermissions: boolean
+  // docs/006-Scheduler.md §2 - per-project cap on how many of this project's tasks
+  // BacklogSchedulerWorkflow lets sit in Executing at once. Backend default is 2;
+  // once the cap is hit, the next Backlog task just waits for a slot (no UX change
+  // here beyond the value itself being editable).
+  maxConcurrentExecuting: number
   createdAt: string
 }
 
@@ -81,6 +86,17 @@ export interface AcceptanceCriterion {
   satisfied: boolean
 }
 
+// Free-form, per-project label distinct from the auto-assigned {prefix}-{number} task
+// tag - see backend Tag entity. Many-to-many with TaskItem via /tasks/{id}/tags.
+export interface Tag {
+  id: string
+  projectId: string
+  name: string
+  // Hex color (e.g. "#3B82F6") - rendered directly as a badge's background.
+  color: string
+  createdAt: string
+}
+
 export interface TaskEvent {
   id: string
   type: string
@@ -98,6 +114,16 @@ export interface Run {
   completionTokens: number
   costEstimate: number
   startedAt: string
+}
+
+export interface Worktree {
+  id: string
+  taskId: string
+  projectId: string
+  path: string
+  branchName: string
+  createdAt: string
+  deletedAt: string | null
 }
 
 export interface TaskItem {
@@ -123,6 +149,8 @@ export interface TaskItem {
   updatedAt: string
   acceptanceCriteria?: AcceptanceCriterion[]
   runs?: Run[]
+  tags?: Tag[]
+  worktree?: Worktree | null
 }
 
 const BASE_URL = '/api'
@@ -167,6 +195,7 @@ export const api = {
     gitProviderPluginId: string
     localPath?: string
     allowAgentBypassPermissions?: boolean
+    maxConcurrentExecuting?: number
   }) =>
     request<Project>('/projects', {
       method: 'POST',
@@ -175,7 +204,10 @@ export const api = {
   updateProject: (
     projectId: string,
     patch: Partial<
-      Pick<Project, 'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions'>
+      Pick<
+        Project,
+        'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions' | 'maxConcurrentExecuting'
+      >
     >,
   ) =>
     request<Project>(`/projects/${projectId}`, {
@@ -240,6 +272,27 @@ export const api = {
       body: JSON.stringify({ comment }),
     }),
   getTask: (taskId: string) => request<TaskItem>(`/tasks/${taskId}`),
+  // Founder-requested (docs/013-Frontend.md) - free-form per-project labels, CRUD
+  // scoped to a Project; assignment onto a Task is the separate pair below.
+  listProjectTags: (projectId: string) => request<Tag[]>(`/projects/${projectId}/tags`),
+  createTag: (projectId: string, name: string, color: string) =>
+    request<Tag>(`/projects/${projectId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ name, color }),
+    }),
+  updateTag: (tagId: string, patch: { name?: string; color?: string }) =>
+    request<Tag>(`/tags/${tagId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteTag: (tagId: string) => request<void>(`/tags/${tagId}`, { method: 'DELETE' }),
+  assignTag: (taskId: string, tagId: string) =>
+    request<Tag[]>(`/tasks/${taskId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tagId }),
+    }),
+  removeTag: (taskId: string, tagId: string) =>
+    request<void>(`/tasks/${taskId}/tags/${tagId}`, { method: 'DELETE' }),
   // docs/000-Vision.md UC-9 - the task detail view's event timeline. Polling stands in
   // for the WebSocket channel docs/007-ExecutionEngine.md §4 still describes as the
   // target mechanism.

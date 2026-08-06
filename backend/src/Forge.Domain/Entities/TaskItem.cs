@@ -34,4 +34,5 @@ public class TaskItem
     public ICollection<AcceptanceCriterion> AcceptanceCriteria { get; set; } = [];
     public ICollection<Run> Runs { get; set; } = [];
     public ICollection<DomainEvent> Events { get; set; } = [];
+    public ICollection<Tag> Tags { get; set; } = [];
 }

@@ -41,6 +41,14 @@ public class Project
     // Defaults false: a newly created project has to be explicitly marked trusted
     // before an agent can run destructive operations against it.
     public bool AllowAgentBypassPermissions { get; set; }
+    // docs/006-Scheduler.md §2/§5 - per-project cap on how many of this Project's tasks
+    // BacklogSchedulerWorkflow will let sit in Executing simultaneously. Was hardcoded
+    // as MaxConcurrentExecutingPerProject in the workflow; now a per-Project setting so
+    // each project's local dev environment (docs/015-Deployment.md) can be tuned
+    // independently. Defaults to 2 - the value the old constant used - so existing
+    // projects keep today's behavior unchanged. Must stay positive: the scheduler would
+    // never promote anything at 0 and negative is meaningless.
+    public int MaxConcurrentExecuting { get; set; } = 2;
     public DateTimeOffset CreatedAt { get; set; }
 
     public Plugin? GitProviderPlugin { get; set; }
