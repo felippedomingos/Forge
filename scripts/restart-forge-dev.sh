@@ -28,13 +28,25 @@ echo "[restart-forge-dev] rebuilding backend..."
 (cd "$REPO_ROOT/backend" && dotnet build > "$LOG_DIR/build.log" 2>&1)
 
 echo "[restart-forge-dev] starting Forge.Api..."
+# Found live (2026-08-06): `(cd X && setsid nohup CMD &)` leaves the subshell itself
+# stuck in do_wait() on its backgrounded job instead of exiting - it never released
+# the stdout/stderr pipe RunShellAsync (AgentActivities.cs) reads via ReadToEndAsync,
+# so the whole Deploy activity hung forever even though CMD itself started fine and
+# kept running correctly. `exec` replaces the subshell's own process image with
+# setsid/nohup/dotnet directly - no bash left behind to wait on anything - and
+# `disown` drops it from this script's job table so backgrounding it doesn't block
+# the script's own exit either. Belt and suspenders, but this bug wedged every
+# subsequent Deploy for the project (via the new per-project semaphore) until the
+# Worker was restarted, so both layers are worth keeping.
 (cd "$REPO_ROOT/backend/src/Forge.Api" && \
-  setsid nohup dotnet run --urls http://localhost:5080 \
-    > "$LOG_DIR/api.log" 2>&1 < /dev/null &)
+  exec setsid nohup dotnet run --urls http://localhost:5080 \
+    > "$LOG_DIR/api.log" 2>&1 < /dev/null) &
+disown
 
 echo "[restart-forge-dev] starting frontend..."
 (cd "$REPO_ROOT/frontend" && \
-  setsid nohup npx vite --port 5173 --host \
-    > "$LOG_DIR/frontend.log" 2>&1 < /dev/null &)
+  exec setsid nohup npx vite --port 5173 --host \
+    > "$LOG_DIR/frontend.log" 2>&1 < /dev/null) &
+disown
 
 echo "[restart-forge-dev] issued - logs in $LOG_DIR"

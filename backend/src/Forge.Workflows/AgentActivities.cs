@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Forge.Domain.Entities;
@@ -445,6 +446,17 @@ public static class AgentActivities
         // implemented yet either) - this field only exists for the frontend button.
         [property: JsonPropertyName("previewUrl")] string? PreviewUrl);
 
+    // Found live (2026-08-06): a `restartTargets` command that backgrounds a detached
+    // process (scripts/restart-forge-dev.sh's own bug, since fixed) can leave a
+    // lingering shell holding the redirected stdout/stderr pipe open forever, even
+    // after the actual work finished - ReadToEndAsync/WaitForExitAsync then hang
+    // indefinitely with no way for Temporal to notice (StartToCloseTimeout doesn't
+    // cancel worker-side code without heartbeating). Worse than a single stuck Deploy:
+    // since the orphaned Task never returns, it never hits the `finally` that releases
+    // GetDeployLock's per-project semaphore either, wedging every subsequent Deploy for
+    // that project until the Worker process is restarted. A hard ceiling here, with a
+    // full process-tree kill on expiry, means a future command with this same class of
+    // bug fails loudly in ~5 minutes instead of silently locking out the whole project.
     private static async Task<(bool Success, string Output)> RunShellAsync(string workingDirectory, string command)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
@@ -459,11 +471,21 @@ public static class AgentActivities
         psi.ArgumentList.Add(command);
 
         using var process = System.Diagnostics.Process.Start(psi)!;
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        return (process.ExitCode == 0, process.ExitCode == 0 ? stdout : stderr);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        try
+        {
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
+            await process.WaitForExitAsync(cts.Token);
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+            return (process.ExitCode == 0, process.ExitCode == 0 ? stdout : stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            return (false, $"Command timed out after 5 minutes and was killed: {command}");
+        }
     }
 
     // docs/015-Deployment.md §3 - polls up to ~30s (10 attempts, 3s apart) rather than
@@ -487,6 +509,22 @@ public static class AgentActivities
         }
         return false;
     }
+
+    // Founder-hit incident (2026-08-05): two Deploy activities for the same project
+    // racing on the same shared restartTargets process (e.g. both restarting the same
+    // self-hosted dev Api) each killed the other's freshly-started process mid-restart,
+    // stalling the health check past the activity's own 10-minute StartToCloseTimeout -
+    // twice in a row, which exhausted DeployActivityOptions' retries and failed the
+    // whole workflow even though the underlying restart script itself works fine run
+    // alone. One semaphore per project serializes Deploy's actual side-effecting work
+    // (migration + restarts + health check) so a second Deploy for the same project
+    // waits its turn instead of racing. In-process only - fine for the single-Worker
+    // deployment model today (docs/016-Roadmap.md's "real dedicated infrastructure"
+    // v2 item would need a distributed lock if that ever becomes multiple Workers).
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> DeployLocks = new();
+
+    private static SemaphoreSlim GetDeployLock(Guid projectId) =>
+        DeployLocks.GetOrAdd(projectId, static _ => new SemaphoreSlim(1, 1));
 
     // docs/005-Agents.md §5, docs/015-Deployment.md §2/§3. Runs `migrationCommand`,
     // then each `restartTargets` entry as its own shell command in order, then polls
@@ -563,41 +601,67 @@ public static class AgentActivities
             return new DeployResult(false, "No directory to run the PublishRecipe against.");
         }
 
-        if (hasMigration)
+        var deployLock = GetDeployLock(task.ProjectId);
+        if (!await deployLock.WaitAsync(TimeSpan.FromMinutes(8)))
         {
-            var (success, output) = await RunShellAsync(runDirectory, recipe!.MigrationCommand!);
-            await RecordEventAsync(db, taskId, success ? "DeployMigrationCompleted" : "DeployFailed", AgentRole.Deploy,
-                new { command = recipe.MigrationCommand, output = Truncate(output, 1000) });
-            if (!success) return new DeployResult(false, Truncate(output, 500));
+            await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                new { reason = "another Deploy for this project was still running after 8 minutes - not running concurrently against the same target." });
+            return new DeployResult(false, "Timed out waiting for another in-progress Deploy for this project to finish.");
         }
 
-        if (hasRestarts)
+        try
         {
-            foreach (var command in recipe!.RestartTargets!)
+            if (hasMigration)
             {
-                var (success, output) = await RunShellAsync(runDirectory, command);
-                await RecordEventAsync(db, taskId, success ? "DeployRestartCompleted" : "DeployFailed", AgentRole.Deploy,
-                    new { command, output = Truncate(output, 1000) });
-                if (!success) return new DeployResult(false, $"Restart command failed ('{command}'): {Truncate(output, 500)}");
+                var (success, output) = await RunShellAsync(runDirectory, recipe!.MigrationCommand!);
+                await RecordEventAsync(db, taskId, success ? "DeployMigrationCompleted" : "DeployFailed", AgentRole.Deploy,
+                    new { command = recipe.MigrationCommand, output = Truncate(output, 1000) });
+                if (!success) return new DeployResult(false, Truncate(output, 500));
             }
-        }
 
-        if (!string.IsNullOrWhiteSpace(recipe?.HealthCheckUrl))
-        {
-            var healthy = await PollHealthCheckAsync(recipe.HealthCheckUrl);
-            await RecordEventAsync(db, taskId, healthy ? "DeployHealthCheckPassed" : "DeployFailed", AgentRole.Deploy,
-                new { url = recipe.HealthCheckUrl, healthy });
-            if (!healthy)
-                return new DeployResult(false, $"Health check at {recipe.HealthCheckUrl} never returned a successful status.");
-        }
+            if (hasRestarts)
+            {
+                foreach (var command in recipe!.RestartTargets!)
+                {
+                    var (success, output) = await RunShellAsync(runDirectory, command);
+                    await RecordEventAsync(db, taskId, success ? "DeployRestartCompleted" : "DeployFailed", AgentRole.Deploy,
+                        new { command, output = Truncate(output, 1000) });
+                    if (!success) return new DeployResult(false, $"Restart command failed ('{command}'): {Truncate(output, 500)}");
+                }
+            }
 
-        await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy, new
+            if (!string.IsNullOrWhiteSpace(recipe?.HealthCheckUrl))
+            {
+                var healthy = await PollHealthCheckAsync(recipe.HealthCheckUrl);
+                await RecordEventAsync(db, taskId, healthy ? "DeployHealthCheckPassed" : "DeployFailed", AgentRole.Deploy,
+                    new { url = recipe.HealthCheckUrl, healthy });
+                if (!healthy)
+                    return new DeployResult(false, $"Health check at {recipe.HealthCheckUrl} never returned a successful status.");
+            }
+
+            await RecordEventAsync(db, taskId, "DeployCompleted", AgentRole.Deploy, new
+            {
+                ranMigration = hasMigration,
+                restartedTargets = recipe?.RestartTargets ?? [],
+                healthChecked = !string.IsNullOrWhiteSpace(recipe?.HealthCheckUrl),
+            });
+            return new DeployResult(true, null);
+        }
+        finally
         {
-            ranMigration = hasMigration,
-            restartedTargets = recipe?.RestartTargets ?? [],
-            healthChecked = !string.IsNullOrWhiteSpace(recipe?.HealthCheckUrl),
-        });
-        return new DeployResult(true, null);
+            deployLock.Release();
+        }
+    }
+
+    // docs/015-Deployment.md §4 / TaskWorkflow's resume-from-state path - GitFinalizeAsync
+    // isn't safely re-runnable (it'd push+`pr create` again), so a resumed workflow
+    // checks this first rather than blindly re-running it.
+    [Activity]
+    public static async Task<bool> HasPullRequestAsync(Guid taskId)
+    {
+        await using var db = OpenDb();
+        var task = await db.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == taskId);
+        return task?.PullRequestUrl is not null;
     }
 
     // docs/005-Agents.md §6 - push + PR creation. Branches on the Project's
@@ -686,9 +750,26 @@ public static class AgentActivities
         if (push.Success)
         {
             var isAzureDevOps = project?.GitProviderPlugin?.Name == "azure-devops";
-            var pr = isAzureDevOps
-                ? await CreateAzureDevOpsPrAsync(worktreePath, project!, task)
-                : await GitOps.RunGhAsync(worktreePath, "pr", "create", "--fill", "--head", task.BranchName);
+            GitCommandResult pr;
+            if (isAzureDevOps)
+            {
+                pr = await CreateAzureDevOpsPrAsync(worktreePath, project!, task);
+            }
+            else
+            {
+                // Found live (2026-08-06): `--fill` derives the PR title from the commit
+                // message's first line - Developer's commit subjects run long (detailed
+                // one-line summaries), and GitHub rejects any PR title over 256 chars
+                // (a hard GraphQL validation error, not a warning). The push already
+                // succeeded by this point, so a title-length failure silently left a
+                // pushed branch with no PR and no way to notice short of checking
+                // PullRequestUrl by hand. Task.Title is short by construction - use it
+                // explicitly instead, with the commit message as the PR body so nothing
+                // from `--fill` is actually lost.
+                var commitMessage = await GitOps.RunAsync(worktreePath, "log", "-1", "--format=%B");
+                var body = commitMessage.Success ? commitMessage.Stdout.Trim() : task.Description ?? "";
+                pr = await GitOps.RunGhAsync(worktreePath, "pr", "create", "--title", task.Title, "--body", body, "--head", task.BranchName!);
+            }
 
             var prUrl = ExtractPrUrl(isAzureDevOps, pr);
             if (prUrl is not null)

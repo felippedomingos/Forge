@@ -76,105 +76,35 @@ public class TaskWorkflow
     }
 
     [WorkflowRun]
-    public async Task RunAsync(Guid taskId)
+    public async Task RunAsync(Guid taskId, TaskState? resumeFrom = null)
     {
-        // docs/004-Workflow.md §3: whichever agent raises a clarification need (Planner
-        // during planning, Developer during execution), Blocked ALWAYS re-enters via
-        // Inbox - one edge, one meaning. This loop is that decision made literal: it
-        // restarts from Inbox every time, whether this is the first pass or a resume
-        // after answers arrive.
-        while (true)
+        // Found necessary live (2026-08-05): a Deploy activity that timed out twice in
+        // a row (StartToClose exhausted, no more retries) kills the whole workflow
+        // outright - Temporal's WORKFLOW_EXECUTION_FAILED is terminal, no auto-resume.
+        // Before this, POST /tasks/{id}/resume always restarted at Inbox, silently
+        // re-running Planner+Developer (wasted tokens, and a real risk of the Developer
+        // re-committing on top of a worktree that already has the right commit) even
+        // though only Deploy had actually failed. `resumeFrom` - the task's own
+        // last-persisted State, passed by the /resume endpoint - lets a restart skip
+        // straight past whichever stages already succeeded.
+        var pastDevelop = resumeFrom is TaskState.AwaitingPublish or TaskState.Publishing or TaskState.Review;
+        var pastReviewApproval = resumeFrom is TaskState.Done;
+
+        if (!pastDevelop && !pastReviewApproval)
         {
-            await SetStateAsync(taskId, TaskState.Inbox);
-            var plan = await Workflow.ExecuteActivityAsync(
-                () => AgentActivities.PlanAsync(taskId),
-                DefaultActivityOptions);
-
-            if (plan.NeedsClarification)
-            {
-                await SetStateAsync(taskId, TaskState.Blocked);
-                await Workflow.WaitConditionAsync(() => _answered);
-                _answered = false;
-                continue;
-            }
-
-            await SetStateAsync(taskId, TaskState.Backlog);
-
-            // docs/003-Domain.md §3 reconciliation: Backlog->Todo is deterministic
-            // scheduler logic (docs/006-Scheduler.md), not an agent - this signal is
-            // sent by that scheduler. A real BacklogSchedulerWorkflow doesn't exist yet
-            // (see docs/006-Scheduler.md §1) - Forge.Api exposes a stand-in
-            // POST /tasks/{id}/promote endpoint until it does.
-            await Workflow.WaitConditionAsync(() => _promoted);
-            _promoted = false;
-            await SetStateAsync(taskId, TaskState.Todo);
-
-            await SetStateAsync(taskId, TaskState.Executing);
-            var dev = await Workflow.ExecuteActivityAsync(
-                () => AgentActivities.DevelopAsync(taskId),
-                DefaultActivityOptions);
-
-            if (dev.NeedsClarification)
-            {
-                await SetStateAsync(taskId, TaskState.Blocked);
-                await Workflow.WaitConditionAsync(() => _answered);
-                _answered = false;
-                continue; // same Blocked->Inbox rule applies to execution-time questions
-            }
-
-            break;
-        }
-
-        // docs/004-Workflow.md row 14 (founder-requested, new): Review can now send a
-        // task back for another Developer pass instead of only approving it forward.
-        // This outer loop is what makes that possible without re-running the Planner -
-        // AwaitingPublish/Publishing/Deploy/Review repeat, but the plan itself
-        // (Task.Description/AcceptanceCriteria) is never touched again.
-        while (true)
-        {
-            await SetStateAsync(taskId, TaskState.AwaitingPublish);
-
-            // docs/004-Workflow.md §5: a failed deploy bounces back to AwaitingPublish,
-            // no auto-retry - the human decides whether/when to press Publish again.
-            DeployResult deploy;
-            do
-            {
-                await Workflow.WaitConditionAsync(() => _publishRequested);
-                _publishRequested = false;
-                await SetStateAsync(taskId, TaskState.Publishing);
-
-                deploy = await Workflow.ExecuteActivityAsync(
-                    () => AgentActivities.DeployAsync(taskId),
-                    DeployActivityOptions);
-
-                if (!deploy.Success)
-                {
-                    await SetStateAsync(taskId, TaskState.AwaitingPublish);
-                }
-            } while (!deploy.Success);
-
-            await SetStateAsync(taskId, TaskState.Review);
-            await Workflow.WaitConditionAsync(() => _reviewApproved || _changesRequested);
-
-            if (!_changesRequested)
-            {
-                break; // _reviewApproved - the only way out to Done
-            }
-
-            _changesRequested = false;
-            await SetStateAsync(taskId, TaskState.Todo);
-
-            // A rework pass can itself hit a genuine question (same as the first
-            // Developer attempt) - resolve it here without unwinding all the way back
-            // to the outer Planner loop, since re-planning was never the problem.
+            // docs/004-Workflow.md §3: whichever agent raises a clarification need (Planner
+            // during planning, Developer during execution), Blocked ALWAYS re-enters via
+            // Inbox - one edge, one meaning. This loop is that decision made literal: it
+            // restarts from Inbox every time, whether this is the first pass or a resume
+            // after answers arrive.
             while (true)
             {
-                await SetStateAsync(taskId, TaskState.Executing);
-                var redev = await Workflow.ExecuteActivityAsync(
-                    () => AgentActivities.DevelopAsync(taskId),
+                await SetStateAsync(taskId, TaskState.Inbox);
+                var plan = await Workflow.ExecuteActivityAsync(
+                    () => AgentActivities.PlanAsync(taskId),
                     DefaultActivityOptions);
 
-                if (redev.NeedsClarification)
+                if (plan.NeedsClarification)
                 {
                     await SetStateAsync(taskId, TaskState.Blocked);
                     await Workflow.WaitConditionAsync(() => _answered);
@@ -182,16 +112,114 @@ public class TaskWorkflow
                     continue;
                 }
 
+                await SetStateAsync(taskId, TaskState.Backlog);
+
+                // docs/003-Domain.md §3 reconciliation: Backlog->Todo is deterministic
+                // scheduler logic (docs/006-Scheduler.md), not an agent - this signal is
+                // sent by that scheduler. A real BacklogSchedulerWorkflow doesn't exist yet
+                // (see docs/006-Scheduler.md §1) - Forge.Api exposes a stand-in
+                // POST /tasks/{id}/promote endpoint until it does.
+                await Workflow.WaitConditionAsync(() => _promoted);
+                _promoted = false;
+                await SetStateAsync(taskId, TaskState.Todo);
+
+                await SetStateAsync(taskId, TaskState.Executing);
+                var dev = await Workflow.ExecuteActivityAsync(
+                    () => AgentActivities.DevelopAsync(taskId),
+                    DefaultActivityOptions);
+
+                if (dev.NeedsClarification)
+                {
+                    await SetStateAsync(taskId, TaskState.Blocked);
+                    await Workflow.WaitConditionAsync(() => _answered);
+                    _answered = false;
+                    continue; // same Blocked->Inbox rule applies to execution-time questions
+                }
+
                 break;
             }
-            // back to AwaitingPublish for another Publish/Deploy/Review cycle
         }
 
-        await SetStateAsync(taskId, TaskState.Done);
+        if (!pastReviewApproval)
+        {
+            // docs/004-Workflow.md row 14 (founder-requested, new): Review can now send a
+            // task back for another Developer pass instead of only approving it forward.
+            // This outer loop is what makes that possible without re-running the Planner -
+            // AwaitingPublish/Publishing/Deploy/Review repeat, but the plan itself
+            // (Task.Description/AcceptanceCriteria) is never touched again.
+            while (true)
+            {
+                await SetStateAsync(taskId, TaskState.AwaitingPublish);
 
-        await Workflow.ExecuteActivityAsync(
-            () => AgentActivities.GitFinalizeAsync(taskId),
-            DefaultActivityOptions);
+                // docs/004-Workflow.md §5: a failed deploy bounces back to AwaitingPublish,
+                // no auto-retry - the human decides whether/when to press Publish again.
+                DeployResult deploy;
+                do
+                {
+                    await Workflow.WaitConditionAsync(() => _publishRequested);
+                    _publishRequested = false;
+                    await SetStateAsync(taskId, TaskState.Publishing);
+
+                    deploy = await Workflow.ExecuteActivityAsync(
+                        () => AgentActivities.DeployAsync(taskId),
+                        DeployActivityOptions);
+
+                    if (!deploy.Success)
+                    {
+                        await SetStateAsync(taskId, TaskState.AwaitingPublish);
+                    }
+                } while (!deploy.Success);
+
+                await SetStateAsync(taskId, TaskState.Review);
+                await Workflow.WaitConditionAsync(() => _reviewApproved || _changesRequested);
+
+                if (!_changesRequested)
+                {
+                    break; // _reviewApproved - the only way out to Done
+                }
+
+                _changesRequested = false;
+                await SetStateAsync(taskId, TaskState.Todo);
+
+                // A rework pass can itself hit a genuine question (same as the first
+                // Developer attempt) - resolve it here without unwinding all the way back
+                // to the outer Planner loop, since re-planning was never the problem.
+                while (true)
+                {
+                    await SetStateAsync(taskId, TaskState.Executing);
+                    var redev = await Workflow.ExecuteActivityAsync(
+                        () => AgentActivities.DevelopAsync(taskId),
+                        DefaultActivityOptions);
+
+                    if (redev.NeedsClarification)
+                    {
+                        await SetStateAsync(taskId, TaskState.Blocked);
+                        await Workflow.WaitConditionAsync(() => _answered);
+                        _answered = false;
+                        continue;
+                    }
+
+                    break;
+                }
+                // back to AwaitingPublish for another Publish/Deploy/Review cycle
+            }
+
+            await SetStateAsync(taskId, TaskState.Done);
+        }
+
+        // GitFinalizeAsync creates a real PR - not safely re-runnable blind. A resume
+        // landing straight in Done (or a fresh run that just got here) both go through
+        // this same idempotency check, so a resume can never open a second PR for the
+        // same task.
+        var alreadyFinalized = await Workflow.ExecuteActivityAsync(
+            () => AgentActivities.HasPullRequestAsync(taskId),
+            PersistActivityOptions);
+        if (!alreadyFinalized)
+        {
+            await Workflow.ExecuteActivityAsync(
+                () => AgentActivities.GitFinalizeAsync(taskId),
+                DefaultActivityOptions);
+        }
 
         // docs/003-Domain.md row 10 / docs/015-Deployment.md §4 (resolved): poll the
         // PR's own merge status directly instead of waiting on an undesigned webhook.

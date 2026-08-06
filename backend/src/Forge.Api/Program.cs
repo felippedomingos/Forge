@@ -611,15 +611,25 @@ app.MapPost("/tasks/{id:guid}/promote", async (TemporalClient temporal, Guid id)
 // with no currently-running workflow - the default WorkflowIdReusePolicy already
 // refuses to start a duplicate over one that's still open, so this can't accidentally
 // clobber a task that's actually being worked.
+// Found necessary live (2026-08-05): a Deploy activity that exhausted its retries
+// killed the workflow after Planner+Developer had already succeeded. Passing the
+// task's own last-persisted State as `resumeFrom` lets TaskWorkflow.RunAsync skip
+// straight past whatever already succeeded instead of always restarting at Inbox -
+// see TaskWorkflow.cs's own comment on the parameter.
 app.MapPost("/tasks/{id:guid}/resume", async (ForgeDbContext db, TemporalClient temporal, Guid id) =>
 {
     var task = await db.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id);
     if (task is null) return Results.NotFound();
 
+    if (task.State == TaskState.Production)
+    {
+        return Results.Conflict(new { error = "This task already reached Production - nothing to resume." });
+    }
+
     try
     {
         await temporal.StartWorkflowAsync(
-            (TaskWorkflow wf) => wf.RunAsync(task.Id),
+            (TaskWorkflow wf) => wf.RunAsync(task.Id, task.State),
             new WorkflowOptions(WorkflowIdFor(task.Id), TaskQueue));
     }
     catch (Temporalio.Exceptions.WorkflowAlreadyStartedException)
