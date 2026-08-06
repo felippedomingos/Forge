@@ -631,6 +631,25 @@ app.MapDelete("/tasks/{id:guid}/tags/{tagId:guid}", async (ForgeDbContext db, Gu
 app.MapGet("/tasks/{id:guid}/runs", async (ForgeDbContext db, Guid id) =>
     await db.Runs.AsNoTracking().Where(r => r.TaskId == id).OrderBy(r => r.StartedAt).ToListAsync());
 
+// Founder-requested (docs/000-Vision.md UC-9's audit/debug angle): the full Claude
+// Code session behind one Run - prompts, responses, and tool calls, in order. Reads
+// straight from the CLI's own on-disk transcript (ClaudeTranscriptReader) rather than
+// duplicating its content into Postgres at record time - Run only stores where to find
+// it (SessionId/TranscriptPath). `available: false` covers both "recorded before this
+// field existed" (TranscriptPath null) and "the file's gone now" (still null after a
+// read attempt) - the frontend renders one empty state either way, not an error.
+app.MapGet("/tasks/{id:guid}/runs/{runId:guid}/session", async (ForgeDbContext db, Guid id, Guid runId) =>
+{
+    var run = await db.Runs.AsNoTracking().FirstOrDefaultAsync(r => r.Id == runId && r.TaskId == id);
+    if (run is null) return Results.NotFound();
+
+    if (run.TranscriptPath is null)
+        return Results.Ok(new RunSessionResponse(false, []));
+
+    var messages = await ClaudeTranscriptReader.ReadAsync(run.TranscriptPath);
+    return Results.Ok(new RunSessionResponse(messages is not null, messages ?? []));
+});
+
 app.MapGet("/tasks/{id:guid}/events", async (ForgeDbContext db, Guid id) =>
     await db.Events.AsNoTracking().Where(e => e.TaskId == id).OrderBy(e => e.OccurredAt).ToListAsync());
 
@@ -878,6 +897,7 @@ record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBra
 // semantically, but stored in the same column: the Planner's prompt is fed whatever
 // was here first, then replaces it with its own synthesized result.
 record CreateTaskRequest(Guid ProjectId, string Title, string? Description);
+record RunSessionResponse(bool Available, List<TranscriptMessage> Messages);
 record AnswerQuestionsRequest(List<string> Answers);
 record RequestChangesRequest(string Comment);
 record MoveTaskRequest(TaskState TargetState);

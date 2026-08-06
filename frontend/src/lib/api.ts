@@ -119,6 +119,29 @@ export interface Run {
   startedAt: string
 }
 
+// Mirrors the backend's TranscriptContentBlock (ClaudeTranscriptReader) - one block of
+// a transcript message's content array. Exactly one of text/toolName/toolResultText is
+// populated depending on `type`.
+export interface TranscriptContentBlock {
+  type: string
+  text: string | null
+  toolName: string | null
+  toolInput: unknown | null
+  toolResultText: string | null
+  isError: boolean | null
+}
+
+export interface TranscriptMessage {
+  role: string
+  timestamp: string | null
+  content: TranscriptContentBlock[]
+}
+
+export interface RunSession {
+  available: boolean
+  messages: TranscriptMessage[]
+}
+
 export interface Worktree {
   id: string
   taskId: string
@@ -309,6 +332,10 @@ export const api = {
   // for the WebSocket channel docs/007-ExecutionEngine.md §4 still describes as the
   // target mechanism.
   getTaskEvents: (taskId: string) => request<TaskEvent[]>(`/tasks/${taskId}/events`),
+  // Full Claude Code session transcript for one Run - loaded on demand (only when a
+  // run is expanded in the detail sheet), not as part of the task/runs fetch.
+  getRunSession: (taskId: string, runId: string) =>
+    request<RunSession>(`/tasks/${taskId}/runs/${runId}/session`),
   // docs/013-Frontend.md - founder-requested global spend indicator. NOT a real
   // account-level quota (see the backend endpoint's own comment) - a sum of
   // per-run CostEstimate, itself an API-list-price estimate, across every project.
