@@ -147,11 +147,23 @@ public class TaskWorkflow
                 // for real, right at the Todo->Executing boundary, and stay parked in Todo
                 // (visibly, via SetStateAsync/PersistTaskStateAsync above) until a slot is
                 // actually free instead of trusting that stale snapshot.
-                while (!await Workflow.ExecuteActivityAsync(
-                    () => SchedulingActivities.HasExecutingCapacityAsync(taskId),
-                    CapacityActivityOptions))
+                // Workflow.Patched, found necessary live (2026-08-06): this gate landed
+                // while real tasks already had open workflow executions whose recorded
+                // history has no HasExecutingCapacity activity at this point. Replaying
+                // an old history against the new code unconditionally would schedule an
+                // activity the history doesn't expect right here -
+                // TMPRL1100 non-determinism, confirmed live on a real task. Patched()
+                // stamps a marker for brand-new executions (gate runs) but returns false
+                // on replay of any history recorded before this line existed (gate
+                // skipped, matching what that history actually did).
+                if (Workflow.Patched("todo-executing-capacity-gate"))
                 {
-                    await Workflow.DelayAsync(TodoCapacityPollInterval);
+                    while (!await Workflow.ExecuteActivityAsync(
+                        () => SchedulingActivities.HasExecutingCapacityAsync(taskId),
+                        CapacityActivityOptions))
+                    {
+                        await Workflow.DelayAsync(TodoCapacityPollInterval);
+                    }
                 }
 
                 await SetStateAsync(taskId, TaskState.Executing);
@@ -242,10 +254,24 @@ public class TaskWorkflow
         // landing straight in Done (or a fresh run that just got here) both go through
         // this same idempotency check, so a resume can never open a second PR for the
         // same task.
-        var alreadyFinalized = await Workflow.ExecuteActivityAsync(
-            () => AgentActivities.HasPullRequestAsync(taskId),
-            PersistActivityOptions);
-        if (!alreadyFinalized)
+        // Workflow.Patched, same reasoning as the capacity gate above: an open workflow
+        // whose history already has a bare GitFinalizeAsync call recorded (from before
+        // this HasPullRequestAsync check existed) would mismatch on replay if this ran
+        // unconditionally. Patched()==false on that old history skips straight to the
+        // unconditional GitFinalizeAsync call, matching what actually happened there.
+        if (Workflow.Patched("skip-git-finalize-if-pr-exists"))
+        {
+            var alreadyFinalized = await Workflow.ExecuteActivityAsync(
+                () => AgentActivities.HasPullRequestAsync(taskId),
+                PersistActivityOptions);
+            if (!alreadyFinalized)
+            {
+                await Workflow.ExecuteActivityAsync(
+                    () => AgentActivities.GitFinalizeAsync(taskId),
+                    DefaultActivityOptions);
+            }
+        }
+        else
         {
             await Workflow.ExecuteActivityAsync(
                 () => AgentActivities.GitFinalizeAsync(taskId),

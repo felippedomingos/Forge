@@ -791,6 +791,19 @@ app.MapPost("/tasks/{id:guid}/promote", async (TemporalClient temporal, Guid id)
     return Results.Ok();
 });
 
+// docs/003-Domain.md row 10 (PipelineConfirmedDeployment) - manual escape hatch for
+// TaskWorkflow's ConfirmProductionAsync signal, found missing live (2026-08-06): the
+// signal existed on the workflow but nothing ever exposed it over HTTP, so a Done task
+// with no PullRequestUrl captured (pre-dating that field, or a push that never got a
+// PR) had no way to reach Production short of the automatic PR-merge poll, which has
+// nothing to check without a URL.
+app.MapPost("/tasks/{id:guid}/confirm-production", async (TemporalClient temporal, Guid id) =>
+{
+    var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
+    await handle.SignalAsync(wf => wf.ConfirmProductionAsync());
+    return Results.Ok();
+});
+
 // docs/012-API.md - recovers a Task whose workflow never got a chance to drive it: the
 // documented gap in POST /tasks (row insert + StartWorkflowAsync aren't one
 // transaction - a crash between the two, or a Worker outage right at creation, leaves
