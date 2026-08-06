@@ -23,9 +23,56 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { STATE_CONFIG } from '@/lib/state-config'
-import { api, parsePublishRecipe } from '@/lib/api'
+import { api, parsePublishRecipe, type TaskEvent } from '@/lib/api'
 import { getContrastTextColor } from '@/lib/utils'
 import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
+
+const CLARIFICATION_EVENT_TYPES = ['PlannerNeedsClarification', 'DeveloperNeedsClarification']
+
+// AgentActivities.cs's RecordEventAsync payloads are free-form JSON per event type -
+// this never throws on malformed/empty strings, it just yields null so callers fall
+// back to showing e.type alone (docs/012-API.md TaskEvent.payload).
+function parseEventPayload(payload: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(payload)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+// The two shapes *NeedsClarification events actually carry (AgentActivities.cs): a
+// real `questions: string[]` from the model, or a `reason: string` operational
+// fallback (missing LocalPath, unparseable model response, untrusted project).
+function getClarificationQuestions(payload: Record<string, unknown> | null): string[] {
+  const questions = payload?.questions
+  return Array.isArray(questions) ? questions.filter((q): q is string => typeof q === 'string' && q.length > 0) : []
+}
+
+function getClarificationReason(payload: Record<string, unknown> | null): string | null {
+  return typeof payload?.reason === 'string' && payload.reason.length > 0 ? payload.reason : null
+}
+
+// Timeline summary: best-effort human-readable line from whichever field a given
+// event type happens to carry, so the list isn't just a wall of e.type values.
+function summarizeEventPayload(event: TaskEvent): string | null {
+  const payload = parseEventPayload(event.payload)
+  if (!payload) return null
+
+  const questions = getClarificationQuestions(payload)
+  if (questions.length === 1) return questions[0]
+  if (questions.length > 1) return `${questions.length} questions: ${questions.join(' · ')}`
+
+  const reason = getClarificationReason(payload)
+  if (reason) return reason
+
+  for (const key of ['message', 'description', 'worktreePath', 'rawResponse']) {
+    const value = payload[key]
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+
+  return null
+}
 
 // docs/000-Vision.md UC-9: click a task, see what it does and how the agent is
 // working right now if it's in progress. The WebSocket (docs/007-ExecutionEngine.md
@@ -187,6 +234,14 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   const config = task ? STATE_CONFIG[task.state] : null
   const inProgress = task && ['Inbox', 'Executing', 'Publishing'].includes(task.state)
   const totalCost = task?.runs?.reduce((sum, r) => sum + r.costEstimate, 0) ?? 0
+
+  const latestClarification = events
+    .filter((e) => CLARIFICATION_EVENT_TYPES.includes(e.type))
+    .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
+    .at(-1)
+  const clarificationPayload = latestClarification ? parseEventPayload(latestClarification.payload) : null
+  const clarificationQuestions = getClarificationQuestions(clarificationPayload)
+  const clarificationReason = getClarificationReason(clarificationPayload)
 
   // Reset the editable priority field whenever a different task's data lands - only
   // task.priority's own identity (not every unrelated refetch) should clobber
@@ -358,6 +413,15 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
               {task.state === 'Blocked' && (
                 <section className="rounded-lg border border-primary/30 bg-primary/5 p-3">
                   <h3 className="mb-2 text-xs font-medium">The Planner needs an answer</h3>
+                  {clarificationQuestions.length > 0 ? (
+                    <ul className="mb-2.5 flex list-disc flex-col gap-1 pl-4 text-xs">
+                      {clarificationQuestions.map((q, i) => (
+                        <li key={i}>{q}</li>
+                      ))}
+                    </ul>
+                  ) : clarificationReason ? (
+                    <p className="mb-2.5 text-xs text-muted-foreground">{clarificationReason}</p>
+                  ) : null}
                   <div className="flex flex-col gap-2">
                     <Input
                       className="h-8 text-xs"
@@ -464,15 +528,19 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
                   Timeline
                 </h3>
                 <ol className="board-scroll flex max-h-56 flex-col gap-2.5 overflow-y-auto pr-1">
-                  {events.map((e) => (
-                    <li key={e.id} className="relative border-l-2 border-border pl-3">
-                      <div className="absolute top-1 -left-[5px] size-2 rounded-full bg-primary" />
-                      <p className="text-[10px] text-muted-foreground">
-                        {new Date(e.occurredAt).toLocaleTimeString()} · {e.actor.replace('agent:', '')}
-                      </p>
-                      <p className="text-xs">{e.type}</p>
-                    </li>
-                  ))}
+                  {events.map((e) => {
+                    const summary = summarizeEventPayload(e)
+                    return (
+                      <li key={e.id} className="relative border-l-2 border-border pl-3">
+                        <div className="absolute top-1 -left-[5px] size-2 rounded-full bg-primary" />
+                        <p className="text-[10px] text-muted-foreground">
+                          {new Date(e.occurredAt).toLocaleTimeString()} · {e.actor.replace('agent:', '')}
+                        </p>
+                        <p className="text-xs">{e.type}</p>
+                        {summary && <p className="text-[10px] text-muted-foreground">{summary}</p>}
+                      </li>
+                    )
+                  })}
                   {events.length === 0 && (
                     <p className="text-xs text-muted-foreground/60">No events yet.</p>
                   )}
