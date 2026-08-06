@@ -45,7 +45,11 @@ public static class AgentActivities
         [property: JsonPropertyName("summary")] string? Summary,
         [property: JsonPropertyName("questions")] List<string>? Questions);
 
-    private static async Task RecordRunAsync(ForgeDbContext db, Guid taskId, AgentRole role, decimal costUsd, int promptTokens, int completionTokens, RunStatus status)
+    // workingDirectory is whatever path ClaudeCliProvider.InvokeAsync actually ran
+    // against (localPath for Planner/Prioritizer, worktreePath for Developer) - needed
+    // alongside the CLI result's own session_id to resolve where the CLI wrote that
+    // session's transcript (ClaudeTranscriptReader.ComputeTranscriptPath).
+    private static async Task RecordRunAsync(ForgeDbContext db, Guid taskId, AgentRole role, ClaudeCliResult cliResult, string workingDirectory, RunStatus status)
     {
         db.Runs.Add(new Run
         {
@@ -56,9 +60,13 @@ public static class AgentActivities
             StartedAt = DateTimeOffset.UtcNow,
             FinishedAt = DateTimeOffset.UtcNow,
             Status = status,
-            PromptTokens = promptTokens,
-            CompletionTokens = completionTokens,
-            CostEstimate = costUsd,
+            PromptTokens = cliResult.InputTokens,
+            CompletionTokens = cliResult.OutputTokens,
+            CostEstimate = cliResult.CostUsd,
+            SessionId = cliResult.SessionId,
+            TranscriptPath = cliResult.SessionId is null
+                ? null
+                : ClaudeTranscriptReader.ComputeTranscriptPath(cliResult.SessionId, workingDirectory),
         });
         await db.SaveChangesAsync();
     }
@@ -204,7 +212,7 @@ public static class AgentActivities
         var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, localPath, allowedTools: ["WebFetch"]);
         var parsed = TryParseLlmJson<PlannerLlmResponse>(cliResult.Text);
 
-        await RecordRunAsync(db, taskId, AgentRole.Planner, cliResult.CostUsd, cliResult.InputTokens, cliResult.OutputTokens,
+        await RecordRunAsync(db, taskId, AgentRole.Planner, cliResult, localPath,
             parsed is null ? RunStatus.Failed : RunStatus.Success);
 
         if (parsed is null)
@@ -246,7 +254,8 @@ public static class AgentActivities
     }
 
     private static string WorktreesRootDir =>
-        Environment.GetEnvironmentVariable("FORGE_WORKTREES_DIR") ?? "/home/felippe/forge-worktrees";
+        Environment.GetEnvironmentVariable("FORGE_WORKTREES_DIR")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "forge-worktrees");
 
     // docs/005-Agents.md §4. Real implementation: sync root branch, create/reuse
     // worktree (docs/007-ExecutionEngine.md §2), then run the same ClaudeCliProvider
@@ -394,7 +403,7 @@ public static class AgentActivities
         var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, worktreePath, bypassPermissions: true);
         var parsed = TryParseLlmJson<DeveloperLlmResponse>(cliResult.Text);
 
-        await RecordRunAsync(db, taskId, AgentRole.Developer, cliResult.CostUsd, cliResult.InputTokens, cliResult.OutputTokens,
+        await RecordRunAsync(db, taskId, AgentRole.Developer, cliResult, worktreePath,
             parsed is null ? RunStatus.Failed : RunStatus.Success);
 
         if (parsed is null)
@@ -879,11 +888,18 @@ public static class AgentActivities
     {
         await using var db = OpenDb();
         var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId);
-        var backlogTasks = await db.Tasks
+        var allBacklogTasks = await db.Tasks
             .Where(t => t.ProjectId == projectId && t.State == TaskState.Backlog)
             .OrderBy(t => t.CreatedAt)
             .ToListAsync();
 
+        if (allBacklogTasks.Count == 0) return;
+
+        // Tasks with a Product Owner-set priority (PATCH /tasks/{id}/priority) are
+        // excluded from this agent's ranking entirely - never reassigned, regardless
+        // of how many other still-unprioritized tasks in the same project triggered
+        // this run.
+        var backlogTasks = allBacklogTasks.Where(t => !t.PriorityManuallySet).ToList();
         if (backlogTasks.Count == 0) return;
 
         if (backlogTasks.Count == 1 || project?.LocalPath is not { } localPath || !Directory.Exists(localPath))
@@ -919,8 +935,7 @@ public static class AgentActivities
         // Attaching this batch call's cost to the first task by creation order - Run
         // is schema'd as single-task (docs/011-Database.md), which doesn't cleanly fit
         // a call spanning multiple tasks. Noted as a known limitation, not fixed here.
-        await RecordRunAsync(db, backlogTasks[0].Id, AgentRole.Prioritizer,
-            cliResult.CostUsd, cliResult.InputTokens, cliResult.OutputTokens,
+        await RecordRunAsync(db, backlogTasks[0].Id, AgentRole.Prioritizer, cliResult, localPath,
             parsed is null ? RunStatus.Failed : RunStatus.Success);
 
         // Validate the model's ordering against the real task set: keep only IDs that

@@ -14,5 +14,15 @@ public class Run
     public int CompletionTokens { get; set; }
     public decimal CostEstimate { get; set; }
 
+    // Claude Code CLI session identifier for this run (docs/012-API.md GET
+    // /tasks/{id}/runs/{runId}/session) - null for runs recorded before this field
+    // existed, or if the CLI's JSON result omitted it for some reason.
+    public string? SessionId { get; set; }
+    // Resolved path to the session's JSONL transcript on disk (ClaudeTranscriptReader),
+    // computed once at record time from SessionId + the working directory the CLI ran
+    // in. Null under the same conditions as SessionId; may also point at a file that
+    // no longer exists if the CLI's own transcript retention has since pruned it.
+    public string? TranscriptPath { get; set; }
+
     public TaskItem? Task { get; set; }
 }

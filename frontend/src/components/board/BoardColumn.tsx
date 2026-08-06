@@ -15,13 +15,24 @@ interface BoardColumnProps {
   // projectId -> "PREFIX" lookup, so each card can render its "{PREFIX}-{number}" tag
   // without every column needing the full Project objects.
   prefixByProjectId: Record<string, string>
+  // projectId -> pastel hex color, same shape/reasoning as prefixByProjectId - lets
+  // TaskCard tint its background per-project without every column needing full
+  // Project objects.
+  colorByProjectId: Record<string, string>
 }
 
 // Founder feedback: all 10 columns must fit on screen (no horizontal scroll) - each
 // column is a flexible grid cell (min-w-0 lets it shrink below its content's natural
 // width) rather than a fixed-width item in a scrolling row. Cards scroll vertically
 // within their own column instead of growing the page.
-export function BoardColumn({ state, tasks, onOpenTask, draggingFromState, prefixByProjectId }: BoardColumnProps) {
+export function BoardColumn({
+  state,
+  tasks,
+  onOpenTask,
+  draggingFromState,
+  prefixByProjectId,
+  colorByProjectId,
+}: BoardColumnProps) {
   const config = STATE_CONFIG[state]
   const acceptsFrom = DROP_TARGETS[state]
   const { setNodeRef, isOver } = useDroppable({ id: state, disabled: !acceptsFrom })
@@ -58,6 +69,7 @@ export function BoardColumn({ state, tasks, onOpenTask, draggingFromState, prefi
             key={task.id}
             task={task}
             tag={`${prefixByProjectId[task.projectId] ?? '?'}-${task.number}`}
+            color={colorByProjectId[task.projectId] ?? '#E5E7EB'}
             onOpen={onOpenTask}
           />
         ))}

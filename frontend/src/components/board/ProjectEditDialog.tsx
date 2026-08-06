@@ -17,6 +17,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api, parsePublishRecipe, type Project } from '@/lib/api'
+import { PROJECT_COLOR_PALETTE } from '@/lib/project-colors'
+import { cn } from '@/lib/utils'
 import { BranchSelect } from './BranchSelect'
 
 // docs/003-Domain.md / docs/005-Agents.md §7 - founder-requested: each project's repo
@@ -44,6 +46,8 @@ export function ProjectEditDialog({
   const [localPath, setLocalPath] = useState(project.localPath ?? '')
   const [previewUrl, setPreviewUrl] = useState(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
   const [allowBypass, setAllowBypass] = useState(project.allowAgentBypassPermissions)
+  const [color, setColor] = useState(project.color)
+  const [maxConcurrentExecuting, setMaxConcurrentExecuting] = useState(String(project.maxConcurrentExecuting))
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -56,6 +60,8 @@ export function ProjectEditDialog({
     setLocalPath(project.localPath ?? '')
     setPreviewUrl(parsePublishRecipe(project.publishRecipe)?.previewUrl ?? '')
     setAllowBypass(project.allowAgentBypassPermissions)
+    setColor(project.color)
+    setMaxConcurrentExecuting(String(project.maxConcurrentExecuting))
     setConfirmingDelete(false)
   }, [open, project])
 
@@ -70,6 +76,10 @@ export function ProjectEditDialog({
     queryClient.invalidateQueries({ queryKey: ['project-memory', project.id] })
   }
 
+  const parsedMaxConcurrentExecuting = Number.parseInt(maxConcurrentExecuting, 10)
+  const maxConcurrentExecutingValid =
+    Number.isInteger(parsedMaxConcurrentExecuting) && parsedMaxConcurrentExecuting > 0
+
   const saveDetails = useMutation({
     mutationFn: () =>
       api.updateProject(project.id, {
@@ -78,6 +88,8 @@ export function ProjectEditDialog({
         rootBranch,
         localPath: localPath || null,
         allowAgentBypassPermissions: allowBypass,
+        color,
+        maxConcurrentExecuting: parsedMaxConcurrentExecuting,
       }),
     onSuccess: () => {
       toast.success('Project updated.')
@@ -178,6 +190,51 @@ export function ProjectEditDialog({
             />
           </div>
 
+          <div className="flex flex-col gap-1.5">
+            <Label>Color</Label>
+            <p className="text-xs text-muted-foreground">
+              Shown as a swatch in the sidebar and tints this project's cards on the
+              board. Restricted to a fixed pastel palette — no free-form hex.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {PROJECT_COLOR_PALETTE.map((swatch) => (
+                <button
+                  key={swatch}
+                  type="button"
+                  onClick={() => setColor(swatch)}
+                  aria-label={`Use color ${swatch}`}
+                  aria-pressed={color === swatch}
+                  className={cn(
+                    'size-6 rounded-full border-2 transition-transform',
+                    color === swatch
+                      ? 'border-foreground scale-110'
+                      : 'border-transparent hover:scale-105',
+                  )}
+                  style={{ backgroundColor: swatch }}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="proj-max-concurrent">Max concurrent executing tasks</Label>
+            <p className="text-xs text-muted-foreground">
+              How many of this project's tasks the scheduler lets sit in Executing at once.
+              Once this many are running, the next Backlog task just waits for a slot.
+            </p>
+            <Input
+              id="proj-max-concurrent"
+              type="number"
+              min={1}
+              step={1}
+              value={maxConcurrentExecuting}
+              onChange={(e) => setMaxConcurrentExecuting(e.target.value)}
+            />
+            {!maxConcurrentExecutingValid && (
+              <p className="text-xs text-destructive">Must be a positive integer.</p>
+            )}
+          </div>
+
           <div className="flex items-start justify-between gap-3 rounded-lg border border-border/60 p-2.5">
             <div className="flex flex-col gap-0.5">
               <Label htmlFor="proj-bypass">Allow agent bypass permissions</Label>
@@ -193,7 +250,7 @@ export function ProjectEditDialog({
           <Button
             size="sm"
             className="w-fit"
-            disabled={saveDetails.isPending}
+            disabled={saveDetails.isPending || !maxConcurrentExecutingValid}
             onClick={() => saveDetails.mutate()}
           >
             Save details
