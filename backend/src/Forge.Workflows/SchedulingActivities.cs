@@ -5,7 +5,11 @@ using Temporalio.Activities;
 
 namespace Forge.Workflows;
 
-public record SchedulingSnapshot(int ExecutingCount, Guid? TopBacklogTaskId, int UnprioritizedBacklogCount);
+public record SchedulingSnapshot(
+    int ExecutingCount,
+    Guid? TopBacklogTaskId,
+    int UnprioritizedBacklogCount,
+    int MaxConcurrentExecuting);
 
 // docs/006-Scheduler.md §1 - queries Postgres directly (the authoritative current-state
 // store per docs/011-Database.md §3) rather than tracking counts in workflow memory,
@@ -25,6 +29,11 @@ public static class SchedulingActivities
             .Options;
         await using var db = new ForgeDbContext(options);
 
+        var maxConcurrentExecuting = await db.Projects
+            .Where(p => p.Id == projectId)
+            .Select(p => p.MaxConcurrentExecuting)
+            .FirstAsync();
+
         var executingCount = await db.Tasks
             .CountAsync(t => t.ProjectId == projectId && t.State == TaskState.Executing);
 
@@ -39,6 +48,6 @@ public static class SchedulingActivities
         var unprioritizedCount = await db.Tasks
             .CountAsync(t => t.ProjectId == projectId && t.State == TaskState.Backlog && t.Priority == null);
 
-        return new SchedulingSnapshot(executingCount, topBacklogTaskId, unprioritizedCount);
+        return new SchedulingSnapshot(executingCount, topBacklogTaskId, unprioritizedCount, maxConcurrentExecuting);
     }
 }

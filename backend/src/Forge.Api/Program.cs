@@ -227,6 +227,25 @@ app.MapPut("/users/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal princip
     return Results.Ok(new { user.Id, user.Name, user.Email, user.Role });
 });
 
+// Admin-only, same check as POST/GET/PUT /users above. Refuses to remove the last
+// Admin account - without this, an Admin could lock every user (including themselves)
+// out of user management entirely, with no way back in short of touching the DB directly.
+app.MapDelete("/users/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var user = await db.Users.FindAsync(id);
+    if (user is null) return Results.NotFound();
+
+    if (user.Role == "Admin" && await db.Users.CountAsync(u => u.Role == "Admin") <= 1)
+        return Results.Conflict(new { error = "Cannot delete the last Admin user." });
+
+    db.Users.Remove(user);
+    await db.SaveChangesAsync();
+
+    return Results.Ok();
+});
+
 // docs/adr/ADR-0006's noted gap ("no password reset flow exists yet") - this is the
 // self-service half of it: any authenticated user can change their own password by
 // proving they know the current one (BCrypt.Verify), no Admin action needed. Admin-driven
@@ -280,6 +299,9 @@ app.MapGet("/git/branches", async (string repositoryUrl) =>
 
 app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, CreateProjectRequest request) =>
 {
+    if (request.MaxConcurrentExecuting <= 0)
+        return Results.BadRequest(new { error = "maxConcurrentExecuting must be a positive integer." });
+
     var project = new Project
     {
         Id = Guid.NewGuid(),
@@ -290,6 +312,7 @@ app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, Crea
         GitProviderPluginId = request.GitProviderPluginId,
         LocalPath = string.IsNullOrWhiteSpace(request.LocalPath) ? null : request.LocalPath,
         AllowAgentBypassPermissions = request.AllowAgentBypassPermissions,
+        MaxConcurrentExecuting = request.MaxConcurrentExecuting,
         CreatedAt = DateTimeOffset.UtcNow
     };
     db.Projects.Add(project);
@@ -314,6 +337,9 @@ app.MapGet("/projects/{id:guid}", async (ForgeDbContext db, Guid id) =>
 // keeps its own dedicated endpoint above.
 app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdateProjectRequest request) =>
 {
+    if (request.MaxConcurrentExecuting is { } maxConcurrentExecuting && maxConcurrentExecuting <= 0)
+        return Results.BadRequest(new { error = "maxConcurrentExecuting must be a positive integer." });
+
     var project = await db.Projects.FindAsync(id);
     if (project is null) return Results.NotFound();
 
@@ -322,13 +348,14 @@ app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdatePro
     if (request.RootBranch is not null) project.RootBranch = request.RootBranch;
     if (request.LocalPath is not null) project.LocalPath = request.LocalPath;
     if (request.AllowAgentBypassPermissions is { } allowBypass) project.AllowAgentBypassPermissions = allowBypass;
+    if (request.MaxConcurrentExecuting is { } newMax) project.MaxConcurrentExecuting = newMax;
     await db.SaveChangesAsync();
     return Results.Ok(project);
 });
 
 // Founder-requested (via sidebar delete). Cascades at the DB level (every FK below
 // Project is DeleteBehavior.Cascade - tasks, sub_tasks, acceptance_criteria, runs,
-// events, worktrees, agent_memory) - the harder part is Temporal, which doesn't know
+// events, worktrees, agent_memory, tags) - the harder part is Temporal, which doesn't know
 // the rows underneath its workflows just vanished. Best-effort terminates the
 // project's long-running BacklogSchedulerWorkflow (docs/006-Scheduler.md - it polls
 // every 5s forever and has no way to notice its project is gone) and every task's
@@ -405,9 +432,62 @@ app.MapDelete("/projects/{id:guid}/memory/{key}", async (ForgeDbContext db, Guid
     return Results.Ok();
 });
 
+// Founder-requested (docs/013-Frontend.md) - free-form, per-project labels (name +
+// color) distinct from the auto-assigned {Prefix}-{Number} tag, for categorizing/
+// filtering tasks on the board. Assigning a Tag onto a Task is a separate pair of
+// endpoints (/tasks/{id}/tags below) - these only manage the Tag rows themselves.
+app.MapGet("/projects/{id:guid}/tags", async (ForgeDbContext db, Guid id) =>
+    await db.Tags.AsNoTracking().Where(t => t.ProjectId == id).OrderBy(t => t.Name).ToListAsync());
+
+app.MapPost("/projects/{id:guid}/tags", async (ForgeDbContext db, Guid id, CreateTagRequest request) =>
+{
+    var project = await db.Projects.FindAsync(id);
+    if (project is null) return Results.NotFound();
+
+    var tag = new Tag
+    {
+        Id = Guid.NewGuid(),
+        ProjectId = id,
+        Name = request.Name,
+        Color = request.Color,
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    db.Tags.Add(tag);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/tags/{tag.Id}", tag);
+});
+
+app.MapPatch("/tags/{id:guid}", async (ForgeDbContext db, Guid id, UpdateTagRequest request) =>
+{
+    var tag = await db.Tags.FindAsync(id);
+    if (tag is null) return Results.NotFound();
+
+    if (request.Name is not null) tag.Name = request.Name;
+    if (request.Color is not null) tag.Color = request.Color;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(tag);
+});
+
+// EF's cascade delete on task_tags (ForgeDbContext) removes the join rows for every
+// task this tag was on - no need to touch TaskItem.Tags here first.
+app.MapDelete("/tags/{id:guid}", async (ForgeDbContext db, Guid id) =>
+{
+    var tag = await db.Tags.FindAsync(id);
+    if (tag is null) return Results.NotFound();
+
+    db.Tags.Remove(tag);
+    await db.SaveChangesAsync();
+
+    return Results.Ok();
+});
+
 app.MapGet("/tasks", async (ForgeDbContext db, Guid? projectId, TaskState? state) =>
 {
-    var query = db.Tasks.AsNoTracking().AsQueryable();
+    // Include(Tags): TaskCard renders each task's assigned tags as badges directly on
+    // the board, not just in the detail sheet - needs them on the list endpoint too.
+    var query = db.Tasks.Include(t => t.Tags).AsNoTracking().AsQueryable();
     if (projectId is not null) query = query.Where(t => t.ProjectId == projectId);
     if (state is not null) query = query.Where(t => t.State == state);
     return await query.ToListAsync();
@@ -453,11 +533,72 @@ app.MapGet("/tasks/{id:guid}", async (ForgeDbContext db, Guid id) =>
         .Include(t => t.SubTasks)
         .Include(t => t.AcceptanceCriteria)
         .Include(t => t.Runs)
+        .Include(t => t.Tags)
+        .Include(t => t.Worktree)
         .AsNoTracking()
         .FirstOrDefaultAsync(t => t.Id == id)
         is { } task
         ? Results.Ok(task)
         : Results.NotFound());
+
+// Mirrors DELETE /projects/{id} above: cascades at the DB level (sub_tasks,
+// acceptance_criteria, runs, events are all DeleteBehavior.Cascade under Task) and
+// best-effort terminates the task's TaskWorkflow so deleting a task doesn't leave an
+// orphaned execution parked indefinitely.
+app.MapDelete("/tasks/{id:guid}", async (ForgeDbContext db, TemporalClient temporal, Guid id) =>
+{
+    var task = await db.Tasks.FindAsync(id);
+    if (task is null) return Results.NotFound();
+
+    db.Tasks.Remove(task);
+    await db.SaveChangesAsync();
+
+    try
+    {
+        await temporal.GetWorkflowHandle(WorkflowIdFor(id)).TerminateAsync("Task deleted");
+    }
+    catch (Exception)
+    {
+        // Already completed, never started, or otherwise gone - nothing to do.
+    }
+
+    return Results.Ok();
+});
+
+// Founder-requested (docs/013-Frontend.md) - assign/remove one of the project's Tags
+// on this Task. The tag itself is created/edited/deleted via the project-scoped
+// /projects/{id}/tags endpoints above; these two only manage the many-to-many link.
+app.MapPost("/tasks/{id:guid}/tags", async (ForgeDbContext db, Guid id, AssignTagRequest request) =>
+{
+    var task = await db.Tasks.Include(t => t.Tags).FirstOrDefaultAsync(t => t.Id == id);
+    if (task is null) return Results.NotFound();
+
+    var tag = await db.Tags.FirstOrDefaultAsync(t => t.Id == request.TagId);
+    if (tag is null) return Results.NotFound($"Tag {request.TagId} not found.");
+    // A tag from another project would be meaningless here - the picker (TaskDetailSheet)
+    // only ever offers the task's own project's tags, but this guards direct API calls too.
+    if (tag.ProjectId != task.ProjectId) return Results.BadRequest("Tag belongs to a different project.");
+
+    if (!task.Tags.Any(t => t.Id == tag.Id))
+    {
+        task.Tags.Add(tag);
+        await db.SaveChangesAsync();
+    }
+    return Results.Ok(task.Tags);
+});
+
+app.MapDelete("/tasks/{id:guid}/tags/{tagId:guid}", async (ForgeDbContext db, Guid id, Guid tagId) =>
+{
+    var task = await db.Tasks.Include(t => t.Tags).FirstOrDefaultAsync(t => t.Id == id);
+    if (task is null) return Results.NotFound();
+
+    var tag = task.Tags.FirstOrDefault(t => t.Id == tagId);
+    if (tag is null) return Results.NotFound();
+
+    task.Tags.Remove(tag);
+    await db.SaveChangesAsync();
+    return Results.Ok();
+});
 
 app.MapGet("/tasks/{id:guid}/runs", async (ForgeDbContext db, Guid id) =>
     await db.Runs.AsNoTracking().Where(r => r.TaskId == id).OrderBy(r => r.StartedAt).ToListAsync());
@@ -676,12 +817,33 @@ app.MapPost("/tasks/{id:guid}/move", async (TemporalClient temporal, Guid id, Mo
     return Results.Ok();
 });
 
+// docs/000-Vision.md's Product Owner/Founder persona - a manual override distinct from
+// AgentActivities.PrioritizeAsync's automatic LLM ranking. Only meaningful in Backlog
+// (Priority stops mattering once SchedulingActivities has already promoted the task out
+// of it), and marks PriorityManuallySet so a later Prioritizer run (triggered by other
+// still-unprioritized tasks in the same project) never overwrites it.
+app.MapPatch("/tasks/{id:guid}/priority", async (ForgeDbContext db, Guid id, SetTaskPriorityRequest request) =>
+{
+    var task = await db.Tasks.FindAsync(id);
+    if (task is null) return Results.NotFound();
+
+    if (task.State != TaskState.Backlog)
+        return Results.BadRequest(new { error = $"Cannot set priority on a task in state {task.State}; only Backlog tasks support manual priority." });
+
+    task.Priority = request.Priority;
+    task.PriorityManuallySet = true;
+    task.UpdatedAt = DateTimeOffset.UtcNow;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(task);
+});
+
 app.Run();
 
 // docs/012-API.md §2 request shapes - kept next to Program.cs at this skeleton stage,
 // move to their own files once the API grows past this first slice.
-record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath, bool AllowAgentBypassPermissions = false);
-record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath, bool? AllowAgentBypassPermissions);
+record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath, bool AllowAgentBypassPermissions = false, int MaxConcurrentExecuting = 2);
+record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath, bool? AllowAgentBypassPermissions, int? MaxConcurrentExecuting);
 // Description is optional, user-provided seed context at creation time (may include a
 // link) - distinct from the Planner-authored Task.Description that AgentActivities.
 // PlanAsync overwrites once it finishes (docs/005-Agents.md §2). Not the same field
@@ -691,6 +853,7 @@ record CreateTaskRequest(Guid ProjectId, string Title, string? Description);
 record AnswerQuestionsRequest(List<string> Answers);
 record RequestChangesRequest(string Comment);
 record MoveTaskRequest(TaskState TargetState);
+record SetTaskPriorityRequest(int Priority);
 // docs/015-Deployment.md §2 - matches AgentActivities.PublishRecipeDto's shape exactly.
 record PublishRecipeRequest(string? MigrationCommand, List<string>? RestartTargets, string? HealthCheckUrl, string? PreviewUrl);
 // docs/005-Agents.md §7 - despite AgentMemory's per-(project,role) schema, the founder
@@ -704,3 +867,7 @@ record LoginRequest(string Email, string Password);
 record CreateUserRequest(string Name, string Email, string Role, string Password);
 record UpdateUserRequest(string? Name, string? Email, string? Role);
 record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+// docs/013-Frontend.md - free-form per-project labels.
+record CreateTagRequest(string Name, string Color);
+record UpdateTagRequest(string? Name, string? Color);
+record AssignTagRequest(Guid TagId);
