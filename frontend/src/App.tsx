@@ -8,9 +8,16 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
-import { Flame } from 'lucide-react'
+import { Flame, Tag as TagIcon } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { CreateTaskDialog } from '@/components/board/CreateTaskDialog'
 import { BoardColumn } from '@/components/board/BoardColumn'
 import { TaskDetailSheet } from '@/components/board/TaskDetailSheet'
@@ -25,6 +32,10 @@ import { AUTH_INVALID_EVENT, getCurrentUser, type AuthUser } from '@/lib/auth'
 function Board({ user }: { user: AuthUser }) {
   const queryClient = useQueryClient()
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all')
+  // Founder-requested board filter by Tag (docs/013-Frontend.md) - reset whenever the
+  // project filter changes, since a tag from another project would otherwise stay
+  // selected while matching nothing.
+  const [selectedTagId, setSelectedTagId] = useState<string>('all')
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [draggingFromState, setDraggingFromState] = useState<TaskState | null>(null)
   // Founder-reported: drag-and-drop wasn't working. Root cause: the whole card had no
@@ -52,11 +63,25 @@ function Board({ user }: { user: AuthUser }) {
 
   const projects = projectsQuery.data ?? []
   const allTasks = tasksQuery.data ?? []
-  const tasks =
+  const tasksInProject =
     selectedProjectId === 'all' ? allTasks : allTasks.filter((t) => t.projectId === selectedProjectId)
+  // Filter options are derived from the tasks actually in view, not a separate
+  // per-project tags fetch - a tag with zero tasks on the board isn't worth listing here.
+  const availableTags = useMemo(() => {
+    const byId = new Map(tasksInProject.flatMap((t) => t.tags ?? []).map((tag) => [tag.id, tag]))
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name))
+  }, [tasksInProject])
+  const tasks =
+    selectedTagId === 'all'
+      ? tasksInProject
+      : tasksInProject.filter((t) => t.tags?.some((tag) => tag.id === selectedTagId))
 
   const prefixByProjectId = useMemo(
     () => Object.fromEntries(projects.map((p) => [p.id, p.prefix])),
+    [projects],
+  )
+  const colorByProjectId = useMemo(
+    () => Object.fromEntries(projects.map((p) => [p.id, p.color])),
     [projects],
   )
   const taskCountByProject = useMemo(() => {
@@ -95,7 +120,10 @@ function Board({ user }: { user: AuthUser }) {
       <ProjectSidebar
         projects={projects}
         selectedProjectId={selectedProjectId}
-        onSelectProject={setSelectedProjectId}
+        onSelectProject={(id) => {
+          setSelectedProjectId(id)
+          setSelectedTagId('all')
+        }}
         taskCountByProject={taskCountByProject}
         totalTaskCount={allTasks.length}
         user={user}
@@ -110,6 +138,23 @@ function Board({ user }: { user: AuthUser }) {
           <p className="text-xs text-muted-foreground">
             {tasks.length} task{tasks.length === 1 ? '' : 's'}
           </p>
+
+          {availableTags.length > 0 && (
+            <Select value={selectedTagId} onValueChange={setSelectedTagId}>
+              <SelectTrigger size="sm" className="h-7 gap-1.5 text-xs">
+                <TagIcon className="size-3.5 text-muted-foreground" />
+                <SelectValue placeholder="All tags" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All tags</SelectItem>
+                {availableTags.map((tag) => (
+                  <SelectItem key={tag.id} value={tag.id}>
+                    {tag.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
           <div className="ml-auto">
             <CreateTaskDialog projects={projects} />
@@ -142,6 +187,7 @@ function Board({ user }: { user: AuthUser }) {
                   onOpenTask={setOpenTaskId}
                   draggingFromState={draggingFromState}
                   prefixByProjectId={prefixByProjectId}
+                  colorByProjectId={colorByProjectId}
                 />
               ))}
             </div>

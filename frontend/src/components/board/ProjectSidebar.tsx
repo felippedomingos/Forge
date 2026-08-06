@@ -90,6 +90,14 @@ export function ProjectSidebar({
               className="flex min-w-0 flex-1 items-center gap-2 text-left"
             >
               <FolderGit2 className="size-3.5 shrink-0" />
+              {/* Founder-requested: a color swatch per row so a project's color is
+                  discoverable from the sidebar alone, not just by spotting it on the
+                  board. */}
+              <span
+                className="size-2.5 shrink-0 rounded-full border border-border/40"
+                style={{ backgroundColor: project.color }}
+                aria-hidden
+              />
               <span className="min-w-0 flex-1 truncate">{project.name}</span>
               <Badge variant="secondary" className="rounded-full px-1.5 text-[10px]">
                 {taskCountByProject[project.id] ?? 0}

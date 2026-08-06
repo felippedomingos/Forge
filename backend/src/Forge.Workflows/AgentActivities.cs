@@ -253,7 +253,8 @@ public static class AgentActivities
     }
 
     private static string WorktreesRootDir =>
-        Environment.GetEnvironmentVariable("FORGE_WORKTREES_DIR") ?? "/home/felippe/forge-worktrees";
+        Environment.GetEnvironmentVariable("FORGE_WORKTREES_DIR")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "forge-worktrees");
 
     // docs/005-Agents.md §4. Real implementation: sync root branch, create/reuse
     // worktree (docs/007-ExecutionEngine.md §2), then run the same ClaudeCliProvider
@@ -806,11 +807,18 @@ public static class AgentActivities
     {
         await using var db = OpenDb();
         var project = await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId);
-        var backlogTasks = await db.Tasks
+        var allBacklogTasks = await db.Tasks
             .Where(t => t.ProjectId == projectId && t.State == TaskState.Backlog)
             .OrderBy(t => t.CreatedAt)
             .ToListAsync();
 
+        if (allBacklogTasks.Count == 0) return;
+
+        // Tasks with a Product Owner-set priority (PATCH /tasks/{id}/priority) are
+        // excluded from this agent's ranking entirely - never reassigned, regardless
+        // of how many other still-unprioritized tasks in the same project triggered
+        // this run.
+        var backlogTasks = allBacklogTasks.Where(t => !t.PriorityManuallySet).ToList();
         if (backlogTasks.Count == 0) return;
 
         if (backlogTasks.Count == 1 || project?.LocalPath is not { } localPath || !Directory.Exists(localPath))

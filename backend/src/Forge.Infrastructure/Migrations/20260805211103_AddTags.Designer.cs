@@ -3,6 +3,7 @@ using System;
 using Forge.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Forge.Infrastructure.Migrations
 {
     [DbContext(typeof(ForgeDbContext))]
-    partial class ForgeDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260805211103_AddTags")]
+    partial class AddTags
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -205,11 +208,6 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("allow_agent_bypass_permissions");
 
-                    b.Property<string>("Color")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("color");
-
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -221,10 +219,6 @@ namespace Forge.Infrastructure.Migrations
                     b.Property<string>("LocalPath")
                         .HasColumnType("text")
                         .HasColumnName("local_path");
-
-                    b.Property<int>("MaxConcurrentExecuting")
-                        .HasColumnType("integer")
-                        .HasColumnName("max_concurrent_executing");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -300,10 +294,6 @@ namespace Forge.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("prompt_tokens");
 
-                    b.Property<string>("SessionId")
-                        .HasColumnType("text")
-                        .HasColumnName("session_id");
-
                     b.Property<DateTimeOffset>("StartedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("started_at");
@@ -316,10 +306,6 @@ namespace Forge.Infrastructure.Migrations
                     b.Property<Guid>("TaskId")
                         .HasColumnType("uuid")
                         .HasColumnName("task_id");
-
-                    b.Property<string>("TranscriptPath")
-                        .HasColumnType("text")
-                        .HasColumnName("transcript_path");
 
                     b.HasKey("Id")
                         .HasName("pk_runs");
@@ -429,10 +415,6 @@ namespace Forge.Infrastructure.Migrations
                     b.Property<int?>("Priority")
                         .HasColumnType("integer")
                         .HasColumnName("priority");
-
-                    b.Property<bool>("PriorityManuallySet")
-                        .HasColumnType("boolean")
-                        .HasColumnName("priority_manually_set");
 
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("uuid")
@@ -651,7 +633,6 @@ namespace Forge.Infrastructure.Migrations
                     b.HasOne("Forge.Domain.Entities.TaskItem", "Task")
                         .WithMany("Events")
                         .HasForeignKey("TaskId")
-                        .OnDelete(DeleteBehavior.Cascade)
                         .HasConstraintName("fk_events_tasks_task_id");
 
                     b.Navigation("Task");
@@ -717,7 +698,6 @@ namespace Forge.Infrastructure.Migrations
                     b.HasOne("Forge.Domain.Entities.Worktree", "Worktree")
                         .WithOne()
                         .HasForeignKey("Forge.Domain.Entities.TaskItem", "WorktreeId")
-                        .OnDelete(DeleteBehavior.SetNull)
                         .HasConstraintName("fk_tasks_worktrees_worktree_id");
 
                     b.Navigation("Project");
