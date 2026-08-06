@@ -27,6 +27,19 @@ public class BacklogSchedulerWorkflow
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
+    // Founder-requested safeguard (2026-08-06): how often this project's tasks get
+    // swept for a dead/stuck TaskWorkflow (SchedulingActivities.RecoverStuckTasksAsync)
+    // and auto-resumed. Much coarser than PollInterval on purpose - this is a real
+    // Temporal DescribeAsync + history fetch per non-terminal task, not a cheap DB
+    // query, and recovery only ever matters on the order of minutes, not seconds.
+    private static readonly TimeSpan RecoveryCheckInterval = TimeSpan.FromMinutes(5);
+
+    private static readonly ActivityOptions RecoveryActivityOptions = new()
+    {
+        StartToCloseTimeout = TimeSpan.FromMinutes(2),
+        RetryPolicy = new RetryPolicy { MaximumAttempts = 3 },
+    };
+
     private static readonly ActivityOptions SnapshotActivityOptions = new()
     {
         StartToCloseTimeout = TimeSpan.FromSeconds(30),
@@ -50,6 +63,11 @@ public class BacklogSchedulerWorkflow
     [WorkflowRun]
     public async Task RunAsync(Guid projectId)
     {
+        // Reset on every ContinueAsNew, which just means the next check happens up to
+        // RecoveryCheckInterval sooner than strictly scheduled - harmless, and simpler
+        // than threading the last-checked time through CreateContinueAsNewException.
+        var nextRecoveryCheck = Workflow.UtcNow + RecoveryCheckInterval;
+
         while (true)
         {
             // Checked once per iteration, right where a continue-as-new is cheapest -
@@ -58,6 +76,29 @@ public class BacklogSchedulerWorkflow
             {
                 throw Workflow.CreateContinueAsNewException(
                     (BacklogSchedulerWorkflow wf) => wf.RunAsync(projectId));
+            }
+
+            // Founder-requested safeguard (2026-08-06): found live, three times this
+            // session - a TaskWorkflow can die outright (a missing activity
+            // registration) or get wedged in an infinite non-determinism retry loop,
+            // and the task just sits frozen with nothing on the board showing anything
+            // is wrong. This project's own scheduler is already the thing responsible
+            // for its tasks making progress, so it's also the natural place to notice
+            // and auto-resume one that's stopped.
+            //
+            // Workflow.Patched, same reasoning as TaskWorkflow's own capacity gate: both
+            // of this project's scheduler executions have been running for hours before
+            // this loop iteration existed, so their history has no
+            // RecoverStuckTasksAsync activity recorded at this point. Patched()==false
+            // on replay of that old history skips the whole block, matching what
+            // actually happened there; a fresh iteration (real time, not replay) always
+            // gets true.
+            if (Workflow.Patched("stuck-task-recovery-safeguard") && Workflow.UtcNow >= nextRecoveryCheck)
+            {
+                await Workflow.ExecuteActivityAsync(
+                    () => SchedulingActivities.RecoverStuckTasksAsync(projectId),
+                    RecoveryActivityOptions);
+                nextRecoveryCheck = Workflow.UtcNow + RecoveryCheckInterval;
             }
 
             var snapshot = await Workflow.ExecuteActivityAsync(

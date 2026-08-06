@@ -37,6 +37,7 @@ using var worker = new TemporalWorker(client, new TemporalWorkerOptions("forge-t
         ActivityDefinition.Create(PersistenceActivities.PersistTaskStateAsync),
         ActivityDefinition.Create(SchedulingActivities.GetSchedulingSnapshotAsync),
         ActivityDefinition.Create(SchedulingActivities.HasExecutingCapacityAsync),
+        ActivityDefinition.Create(SchedulingActivities.RecoverStuckTasksAsync),
     }
 });
 
