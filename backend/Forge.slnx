@@ -5,6 +5,8 @@
     <Project Path="src/Forge.Infrastructure/Forge.Infrastructure.csproj" />
     <Project Path="src/Forge.Worker/Forge.Worker.csproj" />
     <Project Path="src/Forge.Workflows/Forge.Workflows.csproj" />
-    <Project Path="src/Forge.Workflows.Tests/Forge.Workflows.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Forge.Workflows.Tests/Forge.Workflows.Tests.csproj" />
   </Folder>
 </Solution>

@@ -75,8 +75,7 @@ public class BacklogSchedulerWorkflow
                 continue;
             }
 
-            if (snapshot.TopBacklogTaskId is { } taskId &&
-                snapshot.ExecutingCount < SchedulingActivities.MaxConcurrentExecutingPerProject)
+            if (snapshot.TopBacklogTaskId is { } taskId && ShouldPromote(snapshot))
             {
                 var handle = Workflow.GetExternalWorkflowHandle<TaskWorkflow>($"task-{taskId}");
                 await handle.SignalAsync(wf => wf.PromoteToTodoAsync());
@@ -88,4 +87,13 @@ public class BacklogSchedulerWorkflow
             await Workflow.DelayAsync(PollInterval);
         }
     }
+
+    // docs/006-Scheduler.md §2 - the per-project backpressure check: promote the top
+    // Backlog task only while this Project has a free Executing slot, per its own
+    // Project.MaxConcurrentExecuting (was a hardcoded MaxConcurrentExecutingPerProject
+    // constant here; now read per-Project via the snapshot activity). Pulled out as its
+    // own method so the promotion decision is unit-testable without a Temporal test
+    // environment.
+    internal static bool ShouldPromote(SchedulingSnapshot snapshot) =>
+        snapshot.ExecutingCount < snapshot.MaxConcurrentExecuting;
 }
