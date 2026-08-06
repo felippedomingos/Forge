@@ -336,7 +336,7 @@ app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdatePro
 
 // Founder-requested (via sidebar delete). Cascades at the DB level (every FK below
 // Project is DeleteBehavior.Cascade - tasks, sub_tasks, acceptance_criteria, runs,
-// events, worktrees, agent_memory) - the harder part is Temporal, which doesn't know
+// events, worktrees, agent_memory, tags) - the harder part is Temporal, which doesn't know
 // the rows underneath its workflows just vanished. Best-effort terminates the
 // project's long-running BacklogSchedulerWorkflow (docs/006-Scheduler.md - it polls
 // every 5s forever and has no way to notice its project is gone) and every task's
@@ -413,9 +413,62 @@ app.MapDelete("/projects/{id:guid}/memory/{key}", async (ForgeDbContext db, Guid
     return Results.Ok();
 });
 
+// Founder-requested (docs/013-Frontend.md) - free-form, per-project labels (name +
+// color) distinct from the auto-assigned {Prefix}-{Number} tag, for categorizing/
+// filtering tasks on the board. Assigning a Tag onto a Task is a separate pair of
+// endpoints (/tasks/{id}/tags below) - these only manage the Tag rows themselves.
+app.MapGet("/projects/{id:guid}/tags", async (ForgeDbContext db, Guid id) =>
+    await db.Tags.AsNoTracking().Where(t => t.ProjectId == id).OrderBy(t => t.Name).ToListAsync());
+
+app.MapPost("/projects/{id:guid}/tags", async (ForgeDbContext db, Guid id, CreateTagRequest request) =>
+{
+    var project = await db.Projects.FindAsync(id);
+    if (project is null) return Results.NotFound();
+
+    var tag = new Tag
+    {
+        Id = Guid.NewGuid(),
+        ProjectId = id,
+        Name = request.Name,
+        Color = request.Color,
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    db.Tags.Add(tag);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/tags/{tag.Id}", tag);
+});
+
+app.MapPatch("/tags/{id:guid}", async (ForgeDbContext db, Guid id, UpdateTagRequest request) =>
+{
+    var tag = await db.Tags.FindAsync(id);
+    if (tag is null) return Results.NotFound();
+
+    if (request.Name is not null) tag.Name = request.Name;
+    if (request.Color is not null) tag.Color = request.Color;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(tag);
+});
+
+// EF's cascade delete on task_tags (ForgeDbContext) removes the join rows for every
+// task this tag was on - no need to touch TaskItem.Tags here first.
+app.MapDelete("/tags/{id:guid}", async (ForgeDbContext db, Guid id) =>
+{
+    var tag = await db.Tags.FindAsync(id);
+    if (tag is null) return Results.NotFound();
+
+    db.Tags.Remove(tag);
+    await db.SaveChangesAsync();
+
+    return Results.Ok();
+});
+
 app.MapGet("/tasks", async (ForgeDbContext db, Guid? projectId, TaskState? state) =>
 {
-    var query = db.Tasks.AsNoTracking().AsQueryable();
+    // Include(Tags): TaskCard renders each task's assigned tags as badges directly on
+    // the board, not just in the detail sheet - needs them on the list endpoint too.
+    var query = db.Tasks.Include(t => t.Tags).AsNoTracking().AsQueryable();
     if (projectId is not null) query = query.Where(t => t.ProjectId == projectId);
     if (state is not null) query = query.Where(t => t.State == state);
     return await query.ToListAsync();
@@ -461,12 +514,48 @@ app.MapGet("/tasks/{id:guid}", async (ForgeDbContext db, Guid id) =>
         .Include(t => t.SubTasks)
         .Include(t => t.AcceptanceCriteria)
         .Include(t => t.Runs)
+        .Include(t => t.Tags)
         .Include(t => t.Worktree)
         .AsNoTracking()
         .FirstOrDefaultAsync(t => t.Id == id)
         is { } task
         ? Results.Ok(task)
         : Results.NotFound());
+
+// Founder-requested (docs/013-Frontend.md) - assign/remove one of the project's Tags
+// on this Task. The tag itself is created/edited/deleted via the project-scoped
+// /projects/{id}/tags endpoints above; these two only manage the many-to-many link.
+app.MapPost("/tasks/{id:guid}/tags", async (ForgeDbContext db, Guid id, AssignTagRequest request) =>
+{
+    var task = await db.Tasks.Include(t => t.Tags).FirstOrDefaultAsync(t => t.Id == id);
+    if (task is null) return Results.NotFound();
+
+    var tag = await db.Tags.FirstOrDefaultAsync(t => t.Id == request.TagId);
+    if (tag is null) return Results.NotFound($"Tag {request.TagId} not found.");
+    // A tag from another project would be meaningless here - the picker (TaskDetailSheet)
+    // only ever offers the task's own project's tags, but this guards direct API calls too.
+    if (tag.ProjectId != task.ProjectId) return Results.BadRequest("Tag belongs to a different project.");
+
+    if (!task.Tags.Any(t => t.Id == tag.Id))
+    {
+        task.Tags.Add(tag);
+        await db.SaveChangesAsync();
+    }
+    return Results.Ok(task.Tags);
+});
+
+app.MapDelete("/tasks/{id:guid}/tags/{tagId:guid}", async (ForgeDbContext db, Guid id, Guid tagId) =>
+{
+    var task = await db.Tasks.Include(t => t.Tags).FirstOrDefaultAsync(t => t.Id == id);
+    if (task is null) return Results.NotFound();
+
+    var tag = task.Tags.FirstOrDefault(t => t.Id == tagId);
+    if (tag is null) return Results.NotFound();
+
+    task.Tags.Remove(tag);
+    await db.SaveChangesAsync();
+    return Results.Ok();
+});
 
 app.MapGet("/tasks/{id:guid}/runs", async (ForgeDbContext db, Guid id) =>
     await db.Runs.AsNoTracking().Where(r => r.TaskId == id).OrderBy(r => r.StartedAt).ToListAsync());
@@ -713,3 +802,7 @@ record LoginRequest(string Email, string Password);
 record CreateUserRequest(string Name, string Email, string Role, string Password);
 record UpdateUserRequest(string? Name, string? Email, string? Role);
 record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+// docs/013-Frontend.md - free-form per-project labels.
+record CreateTagRequest(string Name, string Color);
+record UpdateTagRequest(string? Name, string? Color);
+record AssignTagRequest(Guid TagId);

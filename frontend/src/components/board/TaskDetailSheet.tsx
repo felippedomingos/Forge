@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, DollarSign, ExternalLink, GitBranch } from 'lucide-react'
+import { CheckCircle2, Circle, DollarSign, ExternalLink, GitBranch, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Sheet,
@@ -15,8 +15,16 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { STATE_CONFIG } from '@/lib/state-config'
 import { api, parsePublishRecipe } from '@/lib/api'
+import { getContrastTextColor } from '@/lib/utils'
 import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
 
 // docs/000-Vision.md UC-9: click a task, see what it does and how the agent is
@@ -98,6 +106,49 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   })
 
   const task = taskQuery.data
+
+  // Founder-requested (docs/013-Frontend.md): pick from the task's own project's
+  // existing tags, or create a new one on the fly - both end with the tag attached to
+  // this task.
+  const [selectedTagId, setSelectedTagId] = useState('')
+  const [newTagName, setNewTagName] = useState('')
+  const [newTagColor, setNewTagColor] = useState('#3b82f6')
+
+  const projectTagsQuery = useQuery({
+    queryKey: ['project-tags', task?.projectId],
+    queryFn: () => api.listProjectTags(task!.projectId),
+    enabled: !!task,
+  })
+
+  const assignTag = useMutation({
+    mutationFn: (tagId: string) => api.assignTag(taskId!, tagId),
+    onSuccess: () => {
+      setSelectedTagId('')
+      invalidate()
+    },
+    onError: () => toast.error('Could not add the tag.'),
+  })
+  const removeTag = useMutation({
+    mutationFn: (tagId: string) => api.removeTag(taskId!, tagId),
+    onSuccess: invalidate,
+    onError: () => toast.error('Could not remove the tag.'),
+  })
+  const createTag = useMutation({
+    mutationFn: () => api.createTag(task!.projectId, newTagName, newTagColor),
+    onSuccess: async (tag) => {
+      await api.assignTag(taskId!, tag.id)
+      setNewTagName('')
+      queryClient.invalidateQueries({ queryKey: ['project-tags', task!.projectId] })
+      invalidate()
+    },
+    onError: () => toast.error('Could not create the tag.'),
+  })
+
+  const availableTags = useMemo(() => {
+    const assignedIds = new Set((task?.tags ?? []).map((t) => t.id))
+    return (projectTagsQuery.data ?? []).filter((t) => !assignedIds.has(t.id))
+  }, [projectTagsQuery.data, task?.tags])
+
   const events = eventsQuery.data ?? []
   const project = projectsQuery.data?.find((p) => p.id === task?.projectId)
   const previewUrl = parsePublishRecipe(project?.publishRecipe ?? null)?.previewUrl
@@ -143,6 +194,84 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
             </SheetHeader>
 
             <div className="flex flex-col gap-5 px-5 py-4">
+              <section>
+                <h3 className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  Tags
+                </h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {(task.tags ?? []).map((tag) => (
+                    <Badge
+                      key={tag.id}
+                      className="gap-1 px-1.5 text-[10px]"
+                      style={{ backgroundColor: tag.color, color: getContrastTextColor(tag.color) }}
+                    >
+                      {tag.name}
+                      <button
+                        onClick={() => removeTag.mutate(tag.id)}
+                        disabled={removeTag.isPending}
+                        aria-label={`Remove ${tag.name}`}
+                        className="opacity-70 hover:opacity-100"
+                      >
+                        <X className="size-2.5" />
+                      </button>
+                    </Badge>
+                  ))}
+                  {(task.tags?.length ?? 0) === 0 && (
+                    <p className="text-xs text-muted-foreground/50">No tags yet.</p>
+                  )}
+                </div>
+
+                <div className="mt-2 flex items-center gap-1.5">
+                  <Select
+                    value={selectedTagId}
+                    onValueChange={(id) => {
+                      setSelectedTagId(id)
+                      assignTag.mutate(id)
+                    }}
+                    disabled={availableTags.length === 0 || assignTag.isPending}
+                  >
+                    <SelectTrigger size="sm" className="h-7 flex-1 text-xs">
+                      <SelectValue
+                        placeholder={availableTags.length === 0 ? 'No more tags to add' : 'Add existing tag…'}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableTags.map((tag) => (
+                        <SelectItem key={tag.id} value={tag.id}>
+                          {tag.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <input
+                    type="color"
+                    value={newTagColor}
+                    onChange={(e) => setNewTagColor(e.target.value)}
+                    className="size-7 shrink-0 cursor-pointer rounded border border-input bg-transparent"
+                    aria-label="New tag color"
+                  />
+                  <Input
+                    className="h-7 flex-1 text-xs"
+                    placeholder="New tag name…"
+                    value={newTagName}
+                    onChange={(e) => setNewTagName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && newTagName && createTag.mutate()}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 shrink-0 text-xs"
+                    disabled={!newTagName || createTag.isPending}
+                    onClick={() => createTag.mutate()}
+                  >
+                    Create
+                  </Button>
+                </div>
+              </section>
+
               {task.worktree && (
                 <section className="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/30 p-3">
                   <h3 className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
