@@ -43,7 +43,20 @@ This table only governs *transient* failures per [[004-Workflow]] §4 — once a
 
 Temporal task queues are FIFO by default — they have no native concept of the `Task.priority` set by the Prioritizer agent ([[003-Domain]], [[005-Agents]] §3). Priority ordering is therefore implemented as application logic inside `BacklogSchedulerWorkflow`: whenever a Worker slot frees up for a Project, the workflow queries that Project's `Backlog` tasks ordered by `Task.priority` (creation order as tiebreaker, per [[005-Agents]] §3) and promotes the top one — priority is a query the scheduler makes, not a property the underlying queue understands.
 
+## 4a. Auto-Recovery Safeguard (found necessary live, 2026-08-06)
+
+This session hit three separate real incidents where a `TaskWorkflow` died outright (a missing activity registration on the Worker, twice) or got wedged in an infinite non-determinism retry loop (`TMPRL1100`, from a code change landing while a real task's history predated it) — in every case, the affected task just sat frozen in whatever board state it was in, with nothing visible anywhere that something was wrong short of cross-checking Temporal directly.
+
+`BacklogSchedulerWorkflow` now calls `SchedulingActivities.RecoverStuckTasksAsync(projectId)` every 5 minutes (`Workflow.Patched`-guarded, since both of this session's scheduler executions predate this code). It covers two cases, both recovering via the same mechanism `POST /tasks/{id}/resume` uses — a fresh `TaskWorkflow` execution with `resumeFrom` set to the task's own last-persisted `State`, so nothing already-completed gets redone:
+
+1. **Workflow already terminal** (`Failed`/`Terminated`/`TimedOut`/`Canceled`) — recovered immediately, regardless of how long ago that happened.
+2. **Workflow still `Running` but stuck** — only for a task that hasn't moved in 15 minutes *and* is in an agent-driven state (`Inbox`/`Backlog`/`Todo`/`Executing` — nothing here should ever be waiting on a human) *and* whose workflow's own most recent history event is itself a task failure (the concrete symptom of a non-determinism loop). Terminated, then resumed.
+
+`Blocked`/`AwaitingPublish`/`Publishing`/`Review` are never touched by the staleness check — those legitimately wait on a human for as long as it takes, and "hasn't moved in 15 minutes" is completely normal there, not a bug. Every recovery is recorded as an `AutoRecovered` event ([[003-Domain]]) with the prior status and reason, so it's auditable from the task's own timeline.
+
 ## 5. Open Questions
 
 - Should per-project concurrency limits be a static config value or dynamically tunable from the UI? Leaning towards a simple per-Project setting exposed in [[013-Frontend]], not invented further here.
+- The auto-recovery safeguard (§4a) checks every non-terminal task on a fixed 5-minute timer, same known limitation as the rest of this document (event-driven would be the target design, not built yet). At today's scale (a handful of tasks per project) a `DescribeAsync` + occasional history fetch per task every 5 minutes is negligible load; would need revisiting if a project ever has hundreds of concurrently in-flight tasks.
+- §4a's tier-2 (stuck-but-`Running`) detection is a heuristic (last history event is a task failure) tuned to the exact failure mode found live this session - it wouldn't catch every conceivable way a workflow could silently stop making progress, just the one actually observed.
 - Whether `BacklogSchedulerWorkflow` needs its own crash-recovery story beyond what Temporal already gives every workflow — likely not, but worth confirming once [[007-ExecutionEngine]] is implemented against a real Worker process.
