@@ -25,7 +25,7 @@ export function TaskCard({
   onOpen: (id: string) => void
 }) {
   const config = STATE_CONFIG[task.state]
-  const draggable = Boolean(config.dragTarget)
+  const draggable = Boolean(config.dragTargets?.length)
   const { theme } = useTheme()
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({

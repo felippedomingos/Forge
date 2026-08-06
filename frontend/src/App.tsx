@@ -60,6 +60,9 @@ function Board({ user }: { user: AuthUser }) {
   const promote = useMutation({ mutationFn: (id: string) => api.promoteTask(id), onSuccess: invalidateTasks })
   const publish = useMutation({ mutationFn: (id: string) => api.moveTask(id, 'Publishing'), onSuccess: invalidateTasks })
   const approve = useMutation({ mutationFn: (id: string) => api.moveTask(id, 'Done'), onSuccess: invalidateTasks })
+  // Same replan action as the "← Rewrite (back to Inbox)" button in TaskDetailSheet -
+  // dragging a Backlog card onto Inbox is just another gesture for it.
+  const replan = useMutation({ mutationFn: (id: string) => api.requestReplan(id), onSuccess: invalidateTasks })
 
   const projects = projectsQuery.data ?? []
   const allTasks = tasksQuery.data ?? []
@@ -107,7 +110,8 @@ function Board({ user }: { user: AuthUser }) {
       return
     }
 
-    if (sourceState === 'Backlog') promote.mutate(taskId)
+    if (sourceState === 'Backlog' && targetState === 'Todo') promote.mutate(taskId)
+    else if (sourceState === 'Backlog' && targetState === 'Inbox') replan.mutate(taskId)
     else if (sourceState === 'AwaitingPublish') publish.mutate(taskId)
     else if (sourceState === 'Review') approve.mutate(taskId)
   }
