@@ -630,6 +630,38 @@ public static class AgentActivities
 
             if (hasRestarts)
             {
+                // Found live (2026-08-06, founder's original ask from early this session):
+                // `restartTargets` restarts whatever's already checked out at
+                // Project.LocalPath - it never pulled in the task's own commit, which
+                // only ever lives in the Worktree until GitFinalizeAsync pushes it
+                // (Review->Done, well after Deploy). A founder clicking "Publish" then
+                // "Testar" was restarting the *old* code every time. When this task has
+                // both a Worktree and a distinct LocalPath (the self-hosted "restart the
+                // real dev servers" shape), merge the task's branch into LocalPath first
+                // - refusing outright on a dirty LocalPath rather than merging over
+                // whatever the founder's own working copy currently has uncommitted.
+                if (task.Worktree is { DeletedAt: null } && task.BranchName is not null &&
+                    !string.IsNullOrWhiteSpace(task.Project.LocalPath) && task.Project.LocalPath != runDirectory)
+                {
+                    var localPath = task.Project.LocalPath;
+                    var status = await RunShellAsync(localPath, "git status --porcelain");
+                    if (!string.IsNullOrWhiteSpace(status.Output))
+                    {
+                        await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                            new { reason = "LocalPath has uncommitted changes - refusing to merge the task branch over them", output = Truncate(status.Output, 1000) });
+                        return new DeployResult(false, "LocalPath has uncommitted changes - commit/stash them before publishing.");
+                    }
+
+                    var merge = await RunShellAsync(localPath, $"git merge --no-edit {task.BranchName}");
+                    await RecordEventAsync(db, taskId, merge.Success ? "DeployBranchMerged" : "DeployFailed", AgentRole.Deploy,
+                        new { branch = task.BranchName, output = Truncate(merge.Output, 1000) });
+                    if (!merge.Success)
+                    {
+                        await RunShellAsync(localPath, "git merge --abort");
+                        return new DeployResult(false, $"Merging '{task.BranchName}' into LocalPath failed: {Truncate(merge.Output, 500)}");
+                    }
+                }
+
                 foreach (var command in recipe!.RestartTargets!)
                 {
                     var (success, output) = await RunShellAsync(runDirectory, command);
