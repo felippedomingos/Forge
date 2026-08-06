@@ -2,7 +2,7 @@ import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
+import { cn, getContrastTextColor } from '@/lib/utils'
 import { useTheme } from '@/lib/useTheme'
 import { hexToRgba } from '@/lib/project-colors'
 import { STATE_CONFIG } from '@/lib/state-config'
@@ -65,6 +65,20 @@ export function TaskCard({
         <span className="font-mono text-[9px] font-medium text-muted-foreground/70">{tag}</span>
         <p className="text-xs leading-snug text-foreground">{task.title}</p>
       </div>
+
+      {(task.tags?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {task.tags!.map((tag) => (
+            <Badge
+              key={tag.id}
+              className="px-1.5 text-[9px]"
+              style={{ backgroundColor: tag.color, color: getContrastTextColor(tag.color) }}
+            >
+              {tag.name}
+            </Badge>
+          ))}
+        </div>
+      )}
 
       {config.spin && (
         <Badge variant="outline" className="w-fit gap-1 border-primary/30 text-[9px] text-primary">

@@ -1,0 +1,127 @@
+name: forge
+
+# Single compose file for the whole stack (replaces docker/local/docker-compose.yml,
+# which only covered Postgres/Temporal/Temporal UI): 6 services total, so
+# `docker compose up -d` from a clean clone is the only step besides filling in .env
+# (copy .env.example -> .env first). See README.md for the walkthrough and
+# docs/015-Deployment.md for the containerized deployment topology.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forge_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-forge}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - forge_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forge} -d ${POSTGRES_DB:-forge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.24
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-forge}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-forge_local_dev}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
+    ports:
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    restart: unless-stopped
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:${TEMPORAL_UI_PORT:-8233}
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8233}:8080"
+
+  forge-api:
+    build:
+      context: ./backend
+      dockerfile: src/Forge.Api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    environment:
+      ConnectionStrings__Forge: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-forge};Username=${POSTGRES_USER:-forge};Password=${POSTGRES_PASSWORD:-forge_local_dev}"
+      TEMPORAL_ADDRESS: temporal:7233
+      FORGE_JWT_SECRET: ${FORGE_JWT_SECRET:?set a real secret in .env - see .env.example}
+      FORGE_CORS_ORIGIN: ${FORGE_CORS_ORIGIN:-http://localhost:5173}
+    ports:
+      - "${FORGE_API_PORT:-5080}:8080"
+
+  forge-worker:
+    build:
+      context: ./backend
+      dockerfile: src/Forge.Worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    environment:
+      FORGE_CONNECTION_STRING: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-forge};Username=${POSTGRES_USER:-forge};Password=${POSTGRES_PASSWORD:-forge_local_dev}"
+      TEMPORAL_ADDRESS: temporal:7233
+      # docs/007-ExecutionEngine.md §2 - default lives inside the named volume below,
+      # not on any particular developer's machine (AgentActivities.WorktreesRootDir).
+      FORGE_WORKTREES_DIR: ${FORGE_WORKTREES_DIR:-/data/forge-worktrees}
+      # GitOps.cs (gh/az subprocess auth) and ClaudeCliProvider.cs (claude CLI auth) -
+      # see .env.example for what each needs and how to obtain it.
+      GH_TOKEN: ${GH_TOKEN:-}
+      AZURE_DEVOPS_EXT_PAT: ${AZURE_DEVOPS_EXT_PAT:-}
+      CLAUDE_CONFIG_DIR: /root/.claude
+    volumes:
+      - forge_worktrees_data:/data/forge-worktrees
+      # Project.LocalPath (set per-project via the UI/API) must point at a path
+      # visible *inside* this container - mount whatever host directory holds your
+      # projects' canonical checkouts here, then use /data/repos/<project> as
+      # LocalPath when creating a project.
+      - ${FORGE_REPOS_DIR:-./data/repos}:/data/repos
+      # Pre-authenticated Claude Code CLI credentials (docs/adr/ADR-0005 - OAuth via
+      # Claude.ai subscription, not an API key) - run `claude` interactively on the
+      # host first, then point this at that login's config dir. Defaults to an empty
+      # local dir so the rest of the stack (board, API, everything short of an actual
+      # agent run) still comes up with zero required setup - Planner/Developer/Deploy
+      # activities will fail with a clear "claude CLI reported an error"/not-logged-in
+      # message until this is pointed at a real login, rather than the whole compose
+      # stack refusing to start.
+      - ${CLAUDE_CONFIG_DIR_HOST:-./data/claude-config}:/root/.claude
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - forge-api
+    environment:
+      # nginx.conf.template - internal Docker-network address of forge-api, not a
+      # browser-facing URL (the browser only ever talks to /api on the frontend's own
+      # origin; nginx is the one proxying that to forge-api).
+      FORGE_API_URL: http://forge-api:8080
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+
+volumes:
+  forge_postgres_data:
+  forge_worktrees_data:

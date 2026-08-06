@@ -60,57 +60,62 @@ export function CreateTaskDialog({ projects }: { projects: Project[] }) {
           <DialogTitle>New task</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 py-2">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="project">Project</Label>
-            <Select value={projectId} onValueChange={setProjectId}>
-              <SelectTrigger id="project" className="w-full">
-                <SelectValue placeholder="Select a project…" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (!projectId || !title || createTask.isPending) return
+            createTask.mutate()
+          }}
+        >
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="project">Project</Label>
+              <Select value={projectId} onValueChange={setProjectId}>
+                <SelectTrigger id="project" className="w-full">
+                  <SelectValue placeholder="Select a project…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="title">Title</Label>
+              <Input
+                id="title"
+                placeholder="What needs to happen?"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                autoFocus
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="notes">Notes (optional)</Label>
+              <Textarea
+                id="notes"
+                placeholder="Extra context, a spec, an issue/design link…"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                A link here gets fetched by the Planner agent before it plans — the rest is
+                filled in from your repo.
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="title">Title</Label>
-            <Input
-              id="title"
-              placeholder="What needs to happen?"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              autoFocus
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="notes">Notes (optional)</Label>
-            <Textarea
-              id="notes"
-              placeholder="Extra context, a spec, an issue/design link…"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              A link here gets fetched by the Planner agent before it plans — the rest is
-              filled in from your repo.
-            </p>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button
-            disabled={!projectId || !title || createTask.isPending}
-            onClick={() => createTask.mutate()}
-          >
-            Create task
-          </Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="submit" disabled={!projectId || !title || createTask.isPending}>
+              Create task
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )
