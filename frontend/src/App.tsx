@@ -84,11 +84,12 @@ function Board({ user }: { user: AuthUser }) {
     () => Object.fromEntries(projects.map((p) => [p.id, p.color])),
     [projects],
   )
+  const activeTasks = useMemo(() => allTasks.filter((t) => t.state !== 'Production'), [allTasks])
   const taskCountByProject = useMemo(() => {
     const counts: Record<string, number> = {}
-    for (const t of allTasks) counts[t.projectId] = (counts[t.projectId] ?? 0) + 1
+    for (const t of activeTasks) counts[t.projectId] = (counts[t.projectId] ?? 0) + 1
     return counts
-  }, [allTasks])
+  }, [activeTasks])
 
   const handleDragStart = (event: DragStartEvent) => {
     setDraggingFromState((event.active.data.current?.state as TaskState) ?? null)
@@ -125,7 +126,7 @@ function Board({ user }: { user: AuthUser }) {
           setSelectedTagId('all')
         }}
         taskCountByProject={taskCountByProject}
-        totalTaskCount={allTasks.length}
+        totalTaskCount={activeTasks.length}
         user={user}
       />
 
