@@ -32,6 +32,11 @@ export interface Project {
   // simplified to one flag): Developer/Deploy refuse to touch the filesystem/shell
   // for this project's tasks unless it's true - see AgentActivities on the backend.
   allowAgentBypassPermissions: boolean
+  // docs/006-Scheduler.md §2 - per-project cap on how many of this project's tasks
+  // BacklogSchedulerWorkflow lets sit in Executing at once. Backend default is 2;
+  // once the cap is hit, the next Backlog task just waits for a slot (no UX change
+  // here beyond the value itself being editable).
+  maxConcurrentExecuting: number
   createdAt: string
 }
 
@@ -174,6 +179,7 @@ export const api = {
     gitProviderPluginId: string
     localPath?: string
     allowAgentBypassPermissions?: boolean
+    maxConcurrentExecuting?: number
   }) =>
     request<Project>('/projects', {
       method: 'POST',
@@ -182,7 +188,10 @@ export const api = {
   updateProject: (
     projectId: string,
     patch: Partial<
-      Pick<Project, 'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions'>
+      Pick<
+        Project,
+        'name' | 'repositoryUrl' | 'rootBranch' | 'localPath' | 'allowAgentBypassPermissions' | 'maxConcurrentExecuting'
+      >
     >,
   ) =>
     request<Project>(`/projects/${projectId}`, {

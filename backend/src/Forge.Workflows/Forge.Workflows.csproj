@@ -17,4 +17,8 @@
     <ProjectReference Include="..\Forge.Infrastructure\Forge.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Forge.Workflows.Tests" />
+  </ItemGroup>
+
 </Project>
