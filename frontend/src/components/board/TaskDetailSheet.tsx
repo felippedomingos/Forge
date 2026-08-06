@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, DollarSign, ExternalLink, X } from 'lucide-react'
+import { CheckCircle2, Circle, DollarSign, ExternalLink, GitBranch, X } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Sheet,
@@ -271,6 +271,17 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
                   </Button>
                 </div>
               </section>
+
+              {task.worktree && (
+                <section className="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/30 p-3">
+                  <h3 className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                    <GitBranch className="size-3.5" />
+                    Worktree
+                  </h3>
+                  <p className="font-mono text-xs break-all">{task.worktree.path}</p>
+                  <p className="font-mono text-xs text-muted-foreground">{task.worktree.branchName}</p>
+                </section>
+              )}
 
               {(task.acceptanceCriteria?.length ?? 0) > 0 && (
                 <section>
