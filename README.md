@@ -8,6 +8,31 @@ This isn't a prototype — Forge has been dogfooding itself: real tasks run end-
 
 ---
 
+## Running Forge locally (Docker Compose)
+
+The whole stack — Postgres, Temporal, Temporal UI, Forge API, Forge Worker, and the frontend — runs as 6 containers from a single `docker-compose.yml` at the repo root. No `dotnet`/`node` toolchain or manually-installed `git`/`gh`/`az`/`claude` CLIs needed on your machine; those are baked into the container images (the Worker's especially, since `Forge.Workflows` shells out to all four).
+
+1. **Clone and configure:**
+   ```bash
+   git clone <this-repo-url> && cd Forge
+   cp .env.example .env
+   ```
+   Edit `.env` — at minimum set `FORGE_JWT_SECRET` (e.g. `openssl rand -base64 48`). `GH_TOKEN` / `AZURE_DEVOPS_EXT_PAT` / `CLAUDE_CONFIG_DIR_HOST` are only needed for the Worker to actually run agent tasks (git/PR/Claude Code CLI credentials) — the board and API come up fine without them, but any task reaching the Developer/Deploy/Git stages will fail until they're set. See the comments in `.env.example` for what each variable needs and where to get it — `CLAUDE_CONFIG_DIR_HOST` in particular points at an *already logged-in* `claude` CLI config directory ([[ADR-0005]]: OAuth via your Claude.ai subscription, not an API key you can just generate).
+
+2. **Bring it up:**
+   ```bash
+   docker compose up -d
+   ```
+   `forge-api` applies pending EF Core migrations on startup — no separate migration step. First run also builds the `forge-api`/`forge-worker`/`frontend` images, which takes a few minutes (the Worker image in particular, since it installs `gh`/`az`/`claude` at build time).
+
+3. **Open the app:** the frontend is at `http://localhost:5173` by default (`FRONTEND_PORT` in `.env`). The Temporal UI (workflow inspection) is at `http://localhost:8233`.
+
+4. **Add a project:** once logged in (first account bootstraps via the UI), create a Project pointing `LocalPath` at a checkout under `/data/repos/...` — that's the in-container path for whatever host directory you set as `FORGE_REPOS_DIR` (default `./data/repos`), mounted into `forge-worker`.
+
+Full details — what each service does, how credentials are wired up, and the one still-open limitation around Forge restarting its own Worker after a self-hosted change — are in [`docs/015-Deployment.md`](docs/015-Deployment.md#6-containerized-bring-up-docker-compose).
+
+---
+
 ## How it works
 
 A `Task` moves through a 10-state board — `Inbox → Backlog → Blocked → Todo → Executing → AwaitingPublish → Publishing → Review → Done → Production` — driven by [Temporal](https://temporal.io) workflows, not polling or cron. Every transition is either a human moving a card, deterministic scheduler logic, or one of five agent roles producing a domain event. The full state machine, its events and its failure/rollback edges are specified in [`docs/003-Domain.md`](docs/003-Domain.md) and [`docs/004-Workflow.md`](docs/004-Workflow.md).
