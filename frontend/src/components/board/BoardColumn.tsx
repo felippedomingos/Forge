@@ -41,7 +41,7 @@ export function BoardColumn({
   const isInvalidTarget = draggingFromState !== null && acceptsFrom !== draggingFromState
 
   return (
-    <div className="flex min-w-0 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-col">
       {/* Founder-requested: always-visible explanation of what this column means/does,
           highlighted so it's immediately clear to anyone looking at the board, not
           just whoever built it - amber to match the accent, not a hover-only tooltip. */}
@@ -58,7 +58,7 @@ export function BoardColumn({
       <div
         ref={setNodeRef}
         className={cn(
-          'board-scroll flex min-h-20 flex-1 flex-col gap-1.5 overflow-y-auto rounded-lg p-1.5 transition-colors',
+          'board-scroll flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto rounded-lg p-1.5 transition-colors',
           isValidTarget && 'bg-primary/10 ring-2 ring-primary/40',
           isInvalidTarget && 'opacity-40',
           isOver && isValidTarget && 'bg-primary/20',

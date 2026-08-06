@@ -179,7 +179,7 @@ function Board({ user }: { user: AuthUser }) {
           <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             {/* Founder feedback: all 10 columns fit on screen, no horizontal scroll -
                 an even grid instead of a scrolling flex row. */}
-            <div className="grid flex-1 grid-cols-10 gap-2 overflow-hidden p-4">
+            <div className="grid min-h-0 flex-1 grid-cols-10 gap-2 overflow-hidden p-4">
               {TASK_STATES.map((state) => (
                 <BoardColumn
                   key={state}
