@@ -488,7 +488,14 @@ public static class AgentActivities
             await process.WaitForExitAsync(cts.Token);
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
-            return (process.ExitCode == 0, process.ExitCode == 0 ? stdout : stderr);
+            // Found live (2026-08-06): `git merge` on a real conflict exits non-zero but
+            // writes its actually-useful "CONFLICT (content): ..." message to stdout, not
+            // stderr - returning stderr-only on failure surfaced a completely empty
+            // DeployFailed output for a real, diagnosable conflict. Concatenate both on
+            // failure so nothing informative is silently dropped; success still returns
+            // stdout alone, unchanged.
+            var output = process.ExitCode == 0 ? stdout : string.Join("\n", new[] { stdout, stderr }.Where(s => !string.IsNullOrWhiteSpace(s)));
+            return (process.ExitCode == 0, output);
         }
         catch (OperationCanceledException)
         {
