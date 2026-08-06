@@ -272,6 +272,9 @@ export const api = {
       body: JSON.stringify({ comment }),
     }),
   getTask: (taskId: string) => request<TaskItem>(`/tasks/${taskId}`),
+  // Mirrors deleteProject above - cascades on the backend (sub-tasks, acceptance
+  // criteria, runs, events) and best-effort terminates the task's TaskWorkflow.
+  deleteTask: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),
   // Founder-requested (docs/013-Frontend.md) - free-form per-project labels, CRUD
   // scoped to a Project; assignment onto a Task is the separate pair below.
   listProjectTags: (projectId: string) => request<Tag[]>(`/projects/${projectId}/tags`),

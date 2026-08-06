@@ -36,7 +36,12 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   const queryClient = useQueryClient()
   const [answerText, setAnswerText] = useState('')
   const [changesComment, setChangesComment] = useState('')
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [priorityText, setPriorityText] = useState('')
+
+  useEffect(() => {
+    setConfirmingDelete(false)
+  }, [taskId])
 
   const taskQuery = useQuery({
     queryKey: ['task', taskId],
@@ -103,6 +108,21 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
       toast.success('Sent back for another pass.')
       setChangesComment('')
       invalidate()
+    },
+  })
+  // Mirrors ProjectEditDialog's "Delete project": cascades on the backend (sub-tasks,
+  // acceptance criteria, runs, events) and best-effort terminates the task's
+  // TaskWorkflow. Irreversible, so this requires a second click before firing.
+  const deleteTask = useMutation({
+    mutationFn: () => api.deleteTask(taskId!),
+    onSuccess: () => {
+      toast.success('Task deleted.')
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      onClose()
+    },
+    onError: () => {
+      toast.error('Could not delete the task.')
+      setConfirmingDelete(false)
     },
   })
   // Product Owner manual override (docs/000-Vision.md persona) - distinct from the
@@ -192,17 +212,28 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
         {task && config && (
           <>
             <SheetHeader className="gap-1.5 border-b border-border/60 pb-3">
-              <div className="flex items-center gap-2">
-                <config.icon className={`size-3.5 text-primary ${config.spin ? 'animate-spin' : ''}`} />
-                <Badge variant="secondary" className="text-[10px]">{config.label}</Badge>
-                {project && (
-                  <Badge variant="outline" className="font-mono text-[10px]">
-                    {project.prefix}-{task.number}
-                  </Badge>
-                )}
-                {inProgress && (
-                  <span className="text-[10px] text-muted-foreground">agent working…</span>
-                )}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <config.icon className={`size-3.5 text-primary ${config.spin ? 'animate-spin' : ''}`} />
+                  <Badge variant="secondary" className="text-[10px]">{config.label}</Badge>
+                  {project && (
+                    <Badge variant="outline" className="font-mono text-[10px]">
+                      {project.prefix}-{task.number}
+                    </Badge>
+                  )}
+                  {inProgress && (
+                    <span className="text-[10px] text-muted-foreground">agent working…</span>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant={confirmingDelete ? 'destructive' : 'ghost'}
+                  className="h-6 px-2 text-[10px] text-muted-foreground hover:text-destructive"
+                  disabled={deleteTask.isPending}
+                  onClick={() => (confirmingDelete ? deleteTask.mutate() : setConfirmingDelete(true))}
+                >
+                  {confirmingDelete ? 'Confirmar exclusão' : 'Delete task'}
+                </Button>
               </div>
               <SheetTitle className="text-left text-base leading-snug">{task.title}</SheetTitle>
               {task.description && (

@@ -522,6 +522,30 @@ app.MapGet("/tasks/{id:guid}", async (ForgeDbContext db, Guid id) =>
         ? Results.Ok(task)
         : Results.NotFound());
 
+// Mirrors DELETE /projects/{id} above: cascades at the DB level (sub_tasks,
+// acceptance_criteria, runs, events are all DeleteBehavior.Cascade under Task) and
+// best-effort terminates the task's TaskWorkflow so deleting a task doesn't leave an
+// orphaned execution parked indefinitely.
+app.MapDelete("/tasks/{id:guid}", async (ForgeDbContext db, TemporalClient temporal, Guid id) =>
+{
+    var task = await db.Tasks.FindAsync(id);
+    if (task is null) return Results.NotFound();
+
+    db.Tasks.Remove(task);
+    await db.SaveChangesAsync();
+
+    try
+    {
+        await temporal.GetWorkflowHandle(WorkflowIdFor(id)).TerminateAsync("Task deleted");
+    }
+    catch (Exception)
+    {
+        // Already completed, never started, or otherwise gone - nothing to do.
+    }
+
+    return Results.Ok();
+});
+
 // Founder-requested (docs/013-Frontend.md) - assign/remove one of the project's Tags
 // on this Task. The tag itself is created/edited/deleted via the project-scoped
 // /projects/{id}/tags endpoints above; these two only manage the many-to-many link.
