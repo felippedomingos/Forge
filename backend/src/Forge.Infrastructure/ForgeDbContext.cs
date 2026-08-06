@@ -49,7 +49,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
             e.HasIndex(t => new { t.ProjectId, t.State }).HasDatabaseName("ix_tasks_project_state");
             e.HasIndex(t => new { t.ProjectId, t.Priority }).HasDatabaseName("ix_tasks_project_priority");
             e.HasOne(t => t.Project).WithMany(p => p.Tasks).HasForeignKey(t => t.ProjectId);
-            e.HasOne(t => t.Worktree).WithOne().HasForeignKey<TaskItem>(t => t.WorktreeId);
+            e.HasOne(t => t.Worktree).WithOne().HasForeignKey<TaskItem>(t => t.WorktreeId).OnDelete(DeleteBehavior.SetNull);
             // Explicit join table name/columns (default would be "TagTaskItem") to match
             // docs/011-Database.md's snake_case naming and the rest of this schema.
             e.HasMany(t => t.Tags).WithMany(tag => tag.Tasks)
@@ -118,7 +118,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
             e.HasKey(ev => ev.Id);
             e.Property(ev => ev.Payload).HasColumnType("jsonb");
             e.HasIndex(ev => new { ev.TaskId, ev.OccurredAt }).HasDatabaseName("ix_events_task_time");
-            e.HasOne(ev => ev.Task).WithMany(t => t.Events).HasForeignKey(ev => ev.TaskId);
+            e.HasOne(ev => ev.Task).WithMany(t => t.Events).HasForeignKey(ev => ev.TaskId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Plugin>(e =>
