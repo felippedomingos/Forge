@@ -200,7 +200,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${res.status}`)
   }
-  return (await res.json()) as T
+  // Found live (2026-08-06): several endpoints return 200 with an empty body
+  // (DELETE /tasks/{id}, DELETE /projects/{id}, /promote, /resume, ...) - calling
+  // res.json() unconditionally threw on the empty body, which every caller's
+  // onError treated as a real failure (skipping invalidateQueries) even though the
+  // request had already succeeded server-side. A 204 has no body by definition;
+  // anything else, read the text first and only parse if it's non-empty.
+  if (res.status === 204) return undefined as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
 }
 
 export const api = {
