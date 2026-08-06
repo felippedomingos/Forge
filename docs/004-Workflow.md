@@ -18,6 +18,7 @@ Extends [[003-Domain]] §3's happy-path table (rows 1–10 there are unchanged) 
 | 12 | `Publishing` | `AwaitingPublish` | `DeployFailed` | Deploy agent | See §5 — bounces back to the human gate rather than auto-retrying. |
 | 13 | `Executing` | `Executing` (retry, no state change) | activity retry per Temporal policy | Temporal (transient failure) | Not a domain-visible transition — see §4. |
 | 14 | `Review` | `Todo` | `ReviewRequestedChanges` | User | Founder-requested, added live: a reviewer can send a task back for another Developer pass instead of only approving. See §3a. |
+| 15 | `Backlog` | `Inbox` | `UserRequestedReplan` | User | Founder-requested (2026-08-06): the Planner's write-up sometimes needs a rewrite before any Developer work starts. `RequestReplanAsync` re-enters via `Inbox` exactly like `Blocked` does (§3) - a fresh `PlanAsync` pass, not a new re-entry shape. |
 
 No other edges are legal. In particular, there is no `Done → *` or `Production → *` edge: once a task reaches `Done`, the only further automatic move is the confirmation into `Production` (row 10 in [[003-Domain]]); anything discovered wrong after that point is a new Task, not a reopening of this one.
 

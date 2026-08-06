@@ -127,6 +127,16 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
       invalidate()
     },
   })
+  // Founder-requested: send a Backlog task back to Inbox for a fresh Planner pass
+  // (e.g. the write-up needs a rewrite before any Developer work starts).
+  const requestReplan = useMutation({
+    mutationFn: () => api.requestReplan(taskId!),
+    onSuccess: () => {
+      toast.success('Sent back to Inbox for a fresh plan.')
+      invalidate()
+    },
+    onError: () => toast.error('Could not send the task back to Inbox.'),
+  })
   const publish = useMutation({
     mutationFn: () => api.moveTask(taskId!, 'Publishing'),
     onSuccess: () => {
@@ -435,9 +445,20 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
 
               {task.state === 'Backlog' && (
                 <section className="flex flex-col gap-2.5">
-                  <Button size="sm" variant="outline" disabled={promote.isPending} onClick={() => promote.mutate()}>
-                    Promote to Todo →
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" disabled={promote.isPending} onClick={() => promote.mutate()}>
+                      Promote to Todo →
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-muted-foreground"
+                      disabled={requestReplan.isPending}
+                      onClick={() => requestReplan.mutate()}
+                    >
+                      ← Rewrite (back to Inbox)
+                    </Button>
+                  </div>
 
                   <div className="flex items-center gap-2">
                     <label className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">

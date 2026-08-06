@@ -284,6 +284,10 @@ export const api = {
   // exist yet - manually promotes one task instead of priority-ordered auto-promotion.
   promoteTask: (taskId: string) =>
     request<void>(`/tasks/${taskId}/promote`, { method: 'POST' }),
+  // Founder-requested: send a Backlog task back to Inbox for a fresh Planner pass
+  // (e.g. the write-up needs a rewrite before any Developer work starts).
+  requestReplan: (taskId: string) =>
+    request<void>(`/tasks/${taskId}/request-replan`, { method: 'POST' }),
   // docs/012-API.md §2 - only the two human-gated transitions this endpoint owns
   // (AwaitingPublish->Publishing, Review->Done). Blocked->Inbox goes through answers().
   moveTask: (taskId: string, targetState: 'Publishing' | 'Done') =>

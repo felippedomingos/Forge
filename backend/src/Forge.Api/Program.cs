@@ -791,6 +791,16 @@ app.MapPost("/tasks/{id:guid}/promote", async (TemporalClient temporal, Guid id)
     return Results.Ok();
 });
 
+// Founder-requested (2026-08-06): sometimes the Planner's write-up needs a rewrite
+// before any Developer work starts - sends a Backlog task back to Inbox for a fresh
+// PlanAsync pass (RequestReplanAsync), mirroring Blocked's existing re-entry shape.
+app.MapPost("/tasks/{id:guid}/request-replan", async (TemporalClient temporal, Guid id) =>
+{
+    var handle = temporal.GetWorkflowHandle<TaskWorkflow>(WorkflowIdFor(id));
+    await handle.SignalAsync(wf => wf.RequestReplanAsync());
+    return Results.Ok();
+});
+
 // docs/003-Domain.md row 10 (PipelineConfirmedDeployment) - manual escape hatch for
 // TaskWorkflow's ConfirmProductionAsync signal, found missing live (2026-08-06): the
 // signal existed on the workflow but nothing ever exposed it over HTTP, so a Done task

@@ -13,6 +13,7 @@ public class TaskWorkflow
     private TaskState _state = TaskState.Inbox;
     private bool _answered;
     private bool _promoted;
+    private bool _replanRequested;
     private bool _publishRequested;
     private bool _reviewApproved;
     private bool _changesRequested;
@@ -136,7 +137,18 @@ public class TaskWorkflow
                 // sent by that scheduler. A real BacklogSchedulerWorkflow doesn't exist yet
                 // (see docs/006-Scheduler.md §1) - Forge.Api exposes a stand-in
                 // POST /tasks/{id}/promote endpoint until it does.
-                await Workflow.WaitConditionAsync(() => _promoted);
+                //
+                // Founder-requested (2026-08-06): sometimes the Planner's write-up needs
+                // a rewrite before any Developer work starts - RequestReplanAsync sends a
+                // Backlog task back to Inbox for a fresh PlanAsync pass, the same loop
+                // Blocked already uses, just entered by a deliberate human choice instead
+                // of an agent's clarifying question.
+                await Workflow.WaitConditionAsync(() => _promoted || _replanRequested);
+                if (_replanRequested)
+                {
+                    _replanRequested = false;
+                    continue;
+                }
                 _promoted = false;
                 await SetStateAsync(taskId, TaskState.Todo);
 
@@ -318,6 +330,17 @@ public class TaskWorkflow
     public Task PromoteToTodoAsync()
     {
         if (_state == TaskState.Backlog) _promoted = true;
+        return Task.CompletedTask;
+    }
+
+    // Founder-requested (2026-08-06): send a Backlog task back to Inbox for a fresh
+    // PlanAsync pass - e.g. the Planner's write-up needs a rewrite before any Developer
+    // work starts. Mirrors Blocked's existing "always re-enters via Inbox" rule
+    // (docs/004-Workflow.md §3) rather than inventing a second re-entry shape.
+    [WorkflowSignal]
+    public Task RequestReplanAsync()
+    {
+        if (_state == TaskState.Backlog) _replanRequested = true;
         return Task.CompletedTask;
     }
 
