@@ -19,6 +19,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
     public DbSet<LlmModel> Models => Set<LlmModel>();
     public DbSet<User> Users => Set<User>();
     public DbSet<AgentMemory> AgentMemories => Set<AgentMemory>();
+    public DbSet<Tag> Tags => Set<Tag>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -49,6 +50,20 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
             e.HasIndex(t => new { t.ProjectId, t.Priority }).HasDatabaseName("ix_tasks_project_priority");
             e.HasOne(t => t.Project).WithMany(p => p.Tasks).HasForeignKey(t => t.ProjectId);
             e.HasOne(t => t.Worktree).WithOne().HasForeignKey<TaskItem>(t => t.WorktreeId).OnDelete(DeleteBehavior.SetNull);
+            // Explicit join table name/columns (default would be "TagTaskItem") to match
+            // docs/011-Database.md's snake_case naming and the rest of this schema.
+            e.HasMany(t => t.Tags).WithMany(tag => tag.Tasks)
+                .UsingEntity(j => j.ToTable("task_tags"));
+        });
+
+        modelBuilder.Entity<Tag>(e =>
+        {
+            e.ToTable("tags");
+            e.HasKey(t => t.Id);
+            e.HasOne(t => t.Project).WithMany().HasForeignKey(t => t.ProjectId);
+            // Two tags with the same name in the same project would be indistinguishable
+            // in the picker (TaskDetailSheet).
+            e.HasIndex(t => new { t.ProjectId, t.Name }).IsUnique();
         });
 
         modelBuilder.Entity<SubTask>(e =>

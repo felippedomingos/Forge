@@ -6,7 +6,7 @@ Draft — Phase 3 (Architecture)
 
 ## 1. Instance Topology
 
-One PostgreSQL 16 instance, two logical databases (already the shape of `docker/local/docker-compose.yml`):
+One PostgreSQL 16 instance, two logical databases (already the shape of the root `docker-compose.yml`):
 
 - `forge` — the schema in this document, managed by EF Core migrations.
 - `temporal` / `temporal_visibility` — created and migrated entirely by Temporal's own `auto-setup` tooling ([[ADR-0001]]). Forge's migrations never touch these.
@@ -158,7 +158,7 @@ The reason this is enough, rather than needing full event sourcing: Temporal alr
 
 ## 4. Migration Strategy
 
-EF Core Migrations against the `forge` database only. `temporal` / `temporal_visibility` are exclusively managed by Temporal's `auto-setup` container ([[ADR-0001]], already working in `docker/local/`) — Forge's migration pipeline must never run against those schemas.
+EF Core Migrations against the `forge` database only. `temporal` / `temporal_visibility` are exclusively managed by Temporal's `auto-setup` container ([[ADR-0001]], already working via the root `docker-compose.yml`) — Forge's migration pipeline must never run against those schemas.
 
 ## 5. Multi-Tenancy
 
