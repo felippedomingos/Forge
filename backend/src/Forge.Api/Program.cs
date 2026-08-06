@@ -453,6 +453,7 @@ app.MapGet("/tasks/{id:guid}", async (ForgeDbContext db, Guid id) =>
         .Include(t => t.SubTasks)
         .Include(t => t.AcceptanceCriteria)
         .Include(t => t.Runs)
+        .Include(t => t.Worktree)
         .AsNoTracking()
         .FirstOrDefaultAsync(t => t.Id == id)
         is { } task
