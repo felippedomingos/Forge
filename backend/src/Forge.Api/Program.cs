@@ -276,6 +276,24 @@ app.MapPost("/users/me/change-password", async (ForgeDbContext db, ClaimsPrincip
     return Results.Ok();
 });
 
+// Admin-driven half of the former ADR-0006 gap: an Admin can reset another user's
+// password without knowing the current one - same Role check as POST/GET/PUT /users
+// above. No current-password verification here by design (that's the point of an
+// admin-driven reset for a user who forgot theirs). Recovered live (2026-08-06): this
+// was already written and tested once, but only on an orphaned branch (task
+// 637b9c8a) that predated today's PR merges and never actually made it into main.
+app.MapPost("/users/{id:guid}/reset-password", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id, ResetPasswordRequest request) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var user = await db.Users.FindAsync(id);
+    if (user is null) return Results.NotFound();
+
+    user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { user.Id, user.Name, user.Email, user.Role });
+});
+
 // docs/012-API.md §2 - the endpoints below are the first slice, not the full v1 surface yet.
 
 app.MapGet("/projects", async (ForgeDbContext db) =>
@@ -948,6 +966,7 @@ record LoginRequest(string Email, string Password);
 record CreateUserRequest(string Name, string Email, string Role, string Password);
 record UpdateUserRequest(string? Name, string? Email, string? Role);
 record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+record ResetPasswordRequest(string NewPassword);
 // docs/013-Frontend.md - free-form per-project labels.
 record CreateTagRequest(string Name, string Color);
 record UpdateTagRequest(string? Name, string? Color);

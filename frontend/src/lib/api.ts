@@ -377,12 +377,18 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(patch),
     }),
-  // Self-service only - proves the current password via BCrypt server-side before
-  // replacing the hash. No Admin-driven reset endpoint exists (ADR-0006's noted gap).
+  // Self-service - proves the current password via BCrypt server-side before
+  // replacing the hash.
   changePassword: (currentPassword: string, newPassword: string) =>
     request<void>('/users/me/change-password', {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  // Admin-driven reset for another user - no current password required.
+  resetPassword: (userId: string, newPassword: string) =>
+    request<{ id: string; name: string; email: string; role: string }>(`/users/${userId}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ newPassword }),
     }),
   // 409 when the target is the last remaining Admin - see Program.cs's DELETE /users/{id}.
   deleteUser: (userId: string) => request<void>(`/users/${userId}`, { method: 'DELETE' }),

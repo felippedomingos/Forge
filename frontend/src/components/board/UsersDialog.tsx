@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Trash2, Users as UsersIcon } from 'lucide-react'
+import { KeyRound, Pencil, Trash2, Users as UsersIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,15 +18,19 @@ import {
 import { api } from '@/lib/api'
 
 // docs/adr/ADR-0006 - Admin-only account management (mirrors the `Role == "Admin"`
-// check already gating POST/PUT/GET /users on the backend). No password reset here -
-// that's the self-service /users/me/change-password flow (ChangePasswordDialog), the
-// only way a PasswordHash ever changes post-creation per the ADR.
+// check already gating POST/PUT/GET /users on the backend; this dialog is itself only
+// mounted for Admins, see ProjectSidebar). Self-service password changes go through the
+// separate /users/me/change-password flow (ChangePasswordDialog) - the "Reset password"
+// action below is the Admin-driven counterpart, for when the target user doesn't know
+// their current password.
 function UserRow({ user }: { user: { id: string; name: string; email: string; role: string } }) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const [name, setName] = useState(user.name)
   const [email, setEmail] = useState(user.email)
   const [role, setRole] = useState(user.role)
+  const [newPassword, setNewPassword] = useState('')
 
   const save = useMutation({
     mutationFn: () => api.updateUser(user.id, { name, email, role }),
@@ -51,6 +55,45 @@ function UserRow({ user }: { user: { id: string; name: string; email: string; ro
     },
   })
 
+  const reset = useMutation({
+    mutationFn: () => api.resetPassword(user.id, newPassword),
+    onSuccess: () => {
+      toast.success(`Password reset for ${user.name}.`)
+      setResetting(false)
+      setNewPassword('')
+    },
+    onError: () => toast.error('Could not reset the password.'),
+  })
+
+  if (resetting) {
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-2">
+        <Label>Reset password for {user.name}</Label>
+        <Input
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="New password"
+          type="password"
+        />
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setResetting(false)
+              setNewPassword('')
+            }}
+          >
+            Cancel
+          </Button>
+          <Button size="sm" disabled={!newPassword || reset.isPending} onClick={() => reset.mutate()}>
+            Reset password
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   if (!editing) {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 p-2">
@@ -61,6 +104,13 @@ function UserRow({ user }: { user: { id: string; name: string; email: string; ro
         <Badge variant="secondary" className="rounded-full px-1.5 text-[10px]">
           {user.role}
         </Badge>
+        <button
+          onClick={() => setResetting(true)}
+          className="shrink-0 text-muted-foreground/50 hover:text-foreground"
+          aria-label={`Reset password for ${user.name}`}
+        >
+          <KeyRound className="size-3.5" />
+        </button>
         <button
           onClick={() => {
             setName(user.name)
