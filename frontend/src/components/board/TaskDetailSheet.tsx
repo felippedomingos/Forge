@@ -25,9 +25,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { STATE_CONFIG } from '@/lib/state-config'
-import { api, parsePublishRecipe, type TaskEvent, type TaskItem } from '@/lib/api'
+import { api, parsePublishRecipe, type TaskEvent } from '@/lib/api'
 import { getContrastTextColor } from '@/lib/utils'
 import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
+import { optimisticTaskMove } from '@/lib/optimisticTaskMove'
 import { RunSessionTranscript } from './RunSessionTranscript'
 
 const CLARIFICATION_EVENT_TYPES = ['PlannerNeedsClarification', 'DeveloperNeedsClarification']
@@ -156,8 +157,17 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
     queryClient.invalidateQueries({ queryKey: ['task-events', taskId] })
   }
 
+  // Founder-reported: every one of these card-state transitions had a visible delay
+  // that read as "didn't work" (see lib/optimisticTaskMove.ts for the root cause -
+  // first found and fixed on approve/Review->Done alone, then reported to also affect
+  // every other move). Each button below only renders while the task is already in
+  // the one source state it transitions out of, so the resulting state is
+  // unambiguous - optimisticTaskMove patches it locally the instant the button is
+  // clicked; each mutation's own invalidate() onSuccess still reconciles with the
+  // server's real value once the workflow catches up.
   const promote = useMutation({
     mutationFn: () => api.promoteTask(taskId!),
+    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Todo'),
     onSuccess: () => {
       toast.success('Promoted to Todo.')
       invalidate()
@@ -167,6 +177,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   // (e.g. the write-up needs a rewrite before any Developer work starts).
   const requestReplan = useMutation({
     mutationFn: () => api.requestReplan(taskId!),
+    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Inbox'),
     onSuccess: () => {
       toast.success('Sent back to Inbox for a fresh plan.')
       invalidate()
@@ -175,36 +186,15 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   })
   const publish = useMutation({
     mutationFn: () => api.moveTask(taskId!, 'Publishing'),
+    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Publishing'),
     onSuccess: () => {
       toast.success('Publishing…')
       invalidate()
     },
   })
-  // Founder-reported: approving Review->Done had a visible delay that read as "didn't
-  // work" - the move endpoint's 200 only confirms the Temporal signal was *delivered*,
-  // not that TaskWorkflow has processed it and persisted the new state yet (that
-  // happens async on the Worker). invalidate() below was refetching before that
-  // landed, so both this panel and the board visibly stayed on Review. Optimistic
-  // update fixes the feedback: Approve only renders while state is already Review, a
-  // single deterministic edge, so setting it locally is safe - invalidate() still
-  // reconciles with the server's real value once the workflow catches up.
   const approve = useMutation({
     mutationFn: () => api.moveTask(taskId!, 'Done'),
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: ['tasks'] })
-      await queryClient.cancelQueries({ queryKey: ['task', taskId] })
-      const previousTasks = queryClient.getQueryData<TaskItem[]>(['tasks'])
-      const previousTask = queryClient.getQueryData<TaskItem>(['task', taskId])
-      queryClient.setQueryData<TaskItem[]>(['tasks'], (old) =>
-        old?.map((t) => (t.id === taskId ? { ...t, state: 'Done' } : t)),
-      )
-      queryClient.setQueryData<TaskItem>(['task', taskId], (old) => (old ? { ...old, state: 'Done' } : old))
-      return { previousTasks, previousTask }
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previousTasks) queryClient.setQueryData(['tasks'], context.previousTasks)
-      if (context?.previousTask) queryClient.setQueryData(['task', taskId], context.previousTask)
-    },
+    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Done'),
     onSuccess: () => {
       toast.success('Approved.')
       invalidate()
@@ -212,6 +202,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   })
   const answer = useMutation({
     mutationFn: () => api.answerTask(taskId!, [answerText]),
+    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Inbox'),
     onSuccess: () => {
       toast.success('Answer sent — back to the Planner.')
       setAnswerText('')
@@ -220,9 +211,14 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   })
   // docs/004-Workflow.md row 14 - founder-requested: send back for another Developer
   // pass instead of only approving. The comment is what DevelopAsync's next run
-  // actually sees (AgentActivities.GetLatestReviewFeedbackAsync).
+  // actually sees (AgentActivities.GetLatestReviewFeedbackAsync). Lands on Todo first
+  // (TaskWorkflow.cs's RunAsync), immediately followed by Executing once the rework
+  // Developer pass starts - optimistic 'Todo' is correct for the instant after this
+  // click, and the WebSocket/poll picks up the Executing flip moments later same as
+  // any other agent-driven transition.
   const requestChanges = useMutation({
     mutationFn: () => api.requestChanges(taskId!, changesComment),
+    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Todo'),
     onSuccess: () => {
       toast.success('Sent back for another pass.')
       setChangesComment('')
