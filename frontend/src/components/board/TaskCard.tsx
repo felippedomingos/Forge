@@ -97,7 +97,15 @@ export function TaskCard({
         // its reserved layout space made these columns' text visibly more indented
         // than every other column). A plain click still opens the task - dnd-kit's
         // activation distance (App.tsx) tells a click from a drag before either fires.
-        'group cursor-pointer gap-1.5 border-border/60 p-2 shadow-sm transition-all hover:border-border hover:shadow-md',
+        // Founder-reported (FORGE-27): a column with many cards squished every card
+        // down to an unreadably short height instead of scrolling. BoardColumn's
+        // scroll container is `flex flex-col` - a flex item defaults to
+        // `flex-shrink: 1`, so once the cards' combined natural height exceeded the
+        // column's available space, the browser shrank each card to fit rather than
+        // letting `overflow-y-auto` take over. `shrink-0` keeps every card at its
+        // natural height; the column scrolls instead, which is what min-h-0 on the
+        // ancestor chain (commit 289106d) was already meant to enable.
+        'group shrink-0 cursor-pointer gap-1.5 border-border/60 p-2 shadow-sm transition-all hover:border-border hover:shadow-md',
         draggable && 'cursor-grab touch-none active:cursor-grabbing',
         isDragging && 'opacity-40',
       )}
