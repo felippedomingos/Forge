@@ -105,6 +105,15 @@ public class TaskWorkflow
         // though only Deploy had actually failed. `resumeFrom` - the task's own
         // last-persisted State, passed by the /resume endpoint - lets a restart skip
         // straight past whichever stages already succeeded.
+        // Founder-requested (2026-08-07): a task inserted directly into Postgres with
+        // no workflow behind it at all (the SlayZone import - real Description already
+        // present, just never ran through PlanAsync) needs a way to start one without
+        // the Planner overwriting that already-curated content. `resumeFrom: Backlog`
+        // now skips straight to the promotion-wait, exactly once, rather than always
+        // restarting at Inbox. Evaluated once here from the workflow's own start
+        // parameter (never changes mid-execution), so this carries no replay risk for
+        // any execution already open - it's only ever exercised by a brand new start.
+        var skipPlanningOnce = resumeFrom is TaskState.Backlog;
         var pastDevelop = resumeFrom is TaskState.AwaitingPublish or TaskState.Publishing or TaskState.Review;
         var pastReviewApproval = resumeFrom is TaskState.Done;
 
@@ -114,21 +123,27 @@ public class TaskWorkflow
             // during planning, Developer during execution), Blocked ALWAYS re-enters via
             // Inbox - one edge, one meaning. This loop is that decision made literal: it
             // restarts from Inbox every time, whether this is the first pass or a resume
-            // after answers arrive.
+            // after answers arrive. The one exception is `skipPlanningOnce` above, itself
+            // reset to false the moment the loop runs once, so a genuine Blocked round-trip
+            // (via `continue` below) still re-plans normally.
             while (true)
             {
-                await SetStateAsync(taskId, TaskState.Inbox);
-                var plan = await Workflow.ExecuteActivityAsync(
-                    () => AgentActivities.PlanAsync(taskId),
-                    DefaultActivityOptions);
-
-                if (plan.NeedsClarification)
+                if (!skipPlanningOnce)
                 {
-                    await SetStateAsync(taskId, TaskState.Blocked);
-                    await Workflow.WaitConditionAsync(() => _answered);
-                    _answered = false;
-                    continue;
+                    await SetStateAsync(taskId, TaskState.Inbox);
+                    var plan = await Workflow.ExecuteActivityAsync(
+                        () => AgentActivities.PlanAsync(taskId),
+                        DefaultActivityOptions);
+
+                    if (plan.NeedsClarification)
+                    {
+                        await SetStateAsync(taskId, TaskState.Blocked);
+                        await Workflow.WaitConditionAsync(() => _answered);
+                        _answered = false;
+                        continue;
+                    }
                 }
+                skipPlanningOnce = false;
 
                 await SetStateAsync(taskId, TaskState.Backlog);
 
