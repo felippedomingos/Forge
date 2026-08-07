@@ -1,6 +1,19 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon, DollarSign, LogOut, ChevronDown, ChevronRight } from 'lucide-react'
+import {
+  FolderGit2,
+  ListTodo,
+  Pencil,
+  Flame,
+  Sun,
+  Moon,
+  DollarSign,
+  LogOut,
+  ChevronDown,
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -46,6 +59,21 @@ export function ProjectSidebar({
       return next
     })
   }
+  // Founder-requested follow-up: collapsing just the Projects list (above) wasn't
+  // enough - the whole nav should tuck away to the left like a drawer, reclaiming
+  // board width entirely rather than only shortening one section. Separate toggle/key
+  // from projectsCollapsed since they're independent preferences (e.g. a collapsed
+  // Projects list should stay collapsed once the drawer is reopened).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem('forge:sidebar-collapsed') === 'true',
+  )
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev
+      localStorage.setItem('forge:sidebar-collapsed', String(next))
+      return next
+    })
+  }
   // Founder-requested: a global spend indicator. Polls rather than reacting to the
   // WebSocket (docs/007-ExecutionEngine.md §4 is per-task, not board-wide) - 15s is
   // frequent enough for a figure that only moves when a Run completes.
@@ -59,11 +87,35 @@ export function ProjectSidebar({
   // the projects list.
   const editingProject = projects.find((p) => p.id === editingProjectId) ?? null
 
+  if (sidebarCollapsed) {
+    return (
+      <nav className="flex w-10 shrink-0 flex-col items-center gap-3 border-r border-border/60 bg-card/30 p-2">
+        <button
+          onClick={toggleSidebarCollapsed}
+          className="text-muted-foreground/70 hover:text-foreground"
+          aria-label="Expand sidebar"
+          title="Expand sidebar"
+        >
+          <PanelLeftOpen className="size-4" />
+        </button>
+        <Flame className="size-4 text-primary" />
+      </nav>
+    )
+  }
+
   return (
     <nav className="flex w-56 shrink-0 flex-col gap-3 border-r border-border/60 bg-card/30 p-3">
       <div className="flex items-center gap-1.5 px-1">
         <Flame className="size-4 text-primary" />
-        <h1 className="text-sm font-semibold">Forge</h1>
+        <h1 className="flex-1 text-sm font-semibold">Forge</h1>
+        <button
+          onClick={toggleSidebarCollapsed}
+          className="text-muted-foreground/50 hover:text-foreground"
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+        >
+          <PanelLeftClose className="size-3.5" />
+        </button>
       </div>
 
       <button
