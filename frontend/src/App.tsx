@@ -28,6 +28,7 @@ import { LoginScreen } from '@/components/auth/LoginScreen'
 import { api, TASK_STATES, type TaskState } from '@/lib/api'
 import { DROP_TARGETS } from '@/lib/state-config'
 import { optimisticTaskMove } from '@/lib/optimisticTaskMove'
+import { useOptimisticTaskStates } from '@/lib/useOptimisticTaskStates'
 import { AUTH_INVALID_EVENT, getCurrentUser, type AuthUser } from '@/lib/auth'
 
 // docs/013-Frontend.md: first slice of the board (docs/000-Vision.md §9 states).
@@ -64,37 +65,53 @@ function Board({ user }: { user: AuthUser }) {
   })
 
   const invalidateTasks = () => queryClient.invalidateQueries({ queryKey: ['tasks'] })
-  // Founder-reported: every drag-and-drop move had a visible delay that read as
-  // "didn't work" (see lib/optimisticTaskMove.ts for the root cause). Each of these
-  // drag targets only exists for one specific source state (state-config.ts's
-  // DROP_TARGETS), so the resulting state is unambiguous - optimisticTaskMove patches
-  // it locally the instant the drag completes; onSuccess's invalidateTasks still
-  // reconciles with the server's real value once the workflow catches up.
+  // Founder-reported, second pass: patching the query cache directly in onMutate
+  // (the first fix) still looked like it "didn't apply" - the 2s poll above is
+  // independent of any mutation and can fire before TaskWorkflow.cs's async
+  // signal-processing has actually landed on the server, overwriting the patch with
+  // stale data (see useOptimisticTaskStates.ts). Overrides live outside the query
+  // cache instead, immune to being clobbered by a poll, and are shared with
+  // TaskDetailSheet (passed down as props) so a move made from either surface stays
+  // consistent everywhere it's shown.
+  const { overrides, setOverride, clearOverride, reconcile } = useOptimisticTaskStates()
+  // Each of these drag targets only exists for one specific source state
+  // (state-config.ts's DROP_TARGETS), so the resulting state is unambiguous -
+  // optimisticTaskMove sets the override the instant the drag completes; onSuccess's
+  // invalidateTasks still triggers a refetch, and reconcile() (below) clears the
+  // override once that refetch's real data actually confirms it.
   const promote = useMutation({
     mutationFn: (id: string) => api.promoteTask(id),
-    ...optimisticTaskMove(queryClient, (id: string) => id, 'Todo'),
+    ...optimisticTaskMove(setOverride, clearOverride, (id: string) => id, 'Todo'),
     onSuccess: invalidateTasks,
   })
   const publish = useMutation({
     mutationFn: (id: string) => api.moveTask(id, 'Publishing'),
-    ...optimisticTaskMove(queryClient, (id: string) => id, 'Publishing'),
+    ...optimisticTaskMove(setOverride, clearOverride, (id: string) => id, 'Publishing'),
     onSuccess: invalidateTasks,
   })
   const approve = useMutation({
     mutationFn: (id: string) => api.moveTask(id, 'Done'),
-    ...optimisticTaskMove(queryClient, (id: string) => id, 'Done'),
+    ...optimisticTaskMove(setOverride, clearOverride, (id: string) => id, 'Done'),
     onSuccess: invalidateTasks,
   })
   // Same replan action as the "← Rewrite (back to Inbox)" button in TaskDetailSheet -
   // dragging a Backlog card onto Inbox is just another gesture for it.
   const replan = useMutation({
     mutationFn: (id: string) => api.requestReplan(id),
-    ...optimisticTaskMove(queryClient, (id: string) => id, 'Inbox'),
+    ...optimisticTaskMove(setOverride, clearOverride, (id: string) => id, 'Inbox'),
     onSuccess: invalidateTasks,
   })
 
   const projects = projectsQuery.data ?? []
-  const allTasks = tasksQuery.data ?? []
+  const allTasksRaw = tasksQuery.data ?? []
+  useEffect(() => {
+    for (const t of allTasksRaw) reconcile(t.id, t.state)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allTasksRaw])
+  const allTasks = useMemo(
+    () => allTasksRaw.map((t) => (overrides[t.id] ? { ...t, state: overrides[t.id] } : t)),
+    [allTasksRaw, overrides],
+  )
   const tasksInProject =
     selectedProjectId === 'all' ? allTasks : allTasks.filter((t) => t.projectId === selectedProjectId)
   // Filter options are derived from the tasks actually in view, not a separate
@@ -260,7 +277,13 @@ function Board({ user }: { user: AuthUser }) {
         )}
       </div>
 
-      <TaskDetailSheet taskId={openTaskId} onClose={() => setOpenTaskId(null)} />
+      <TaskDetailSheet
+        taskId={openTaskId}
+        onClose={() => setOpenTaskId(null)}
+        stateOverride={openTaskId ? overrides[openTaskId] : undefined}
+        setStateOverride={setOverride}
+        clearStateOverride={clearOverride}
+      />
     </div>
   )
 }

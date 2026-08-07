@@ -25,7 +25,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { STATE_CONFIG } from '@/lib/state-config'
-import { api, parsePublishRecipe, type TaskEvent } from '@/lib/api'
+import { api, parsePublishRecipe, type TaskEvent, type TaskState } from '@/lib/api'
 import { getContrastTextColor } from '@/lib/utils'
 import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
 import { optimisticTaskMove } from '@/lib/optimisticTaskMove'
@@ -118,7 +118,22 @@ function summarizeEventPayload(event: TaskEvent): string | null {
 // §4) is the real, fast path now - it wakes a refetch the instant Postgres NOTIFYs;
 // the 10s poll below is just a fallback for a dropped/blocked socket, not the
 // primary mechanism anymore.
-export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
+export function TaskDetailSheet({
+  taskId,
+  onClose,
+  stateOverride,
+  setStateOverride,
+  clearStateOverride,
+}: {
+  taskId: string | null
+  onClose: () => void
+  // Lifted to App.tsx's Board (useOptimisticTaskStates) so a move made from either
+  // this panel or the board's own drag-and-drop stays consistent everywhere it's
+  // shown - see optimisticTaskMove.ts/useOptimisticTaskStates.ts for why.
+  stateOverride: TaskState | undefined
+  setStateOverride: (taskId: string, state: TaskState) => void
+  clearStateOverride: (taskId: string) => void
+}) {
   const queryClient = useQueryClient()
   const [answerText, setAnswerText] = useState('')
   const [changesComment, setChangesComment] = useState('')
@@ -167,7 +182,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   // server's real value once the workflow catches up.
   const promote = useMutation({
     mutationFn: () => api.promoteTask(taskId!),
-    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Todo'),
+    ...optimisticTaskMove<void>(setStateOverride, clearStateOverride, () => taskId!, 'Todo'),
     onSuccess: () => {
       toast.success('Promoted to Todo.')
       invalidate()
@@ -177,7 +192,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   // (e.g. the write-up needs a rewrite before any Developer work starts).
   const requestReplan = useMutation({
     mutationFn: () => api.requestReplan(taskId!),
-    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Inbox'),
+    ...optimisticTaskMove<void>(setStateOverride, clearStateOverride, () => taskId!, 'Inbox'),
     onSuccess: () => {
       toast.success('Sent back to Inbox for a fresh plan.')
       invalidate()
@@ -186,7 +201,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   })
   const publish = useMutation({
     mutationFn: () => api.moveTask(taskId!, 'Publishing'),
-    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Publishing'),
+    ...optimisticTaskMove<void>(setStateOverride, clearStateOverride, () => taskId!, 'Publishing'),
     onSuccess: () => {
       toast.success('Publishing…')
       invalidate()
@@ -194,7 +209,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   })
   const approve = useMutation({
     mutationFn: () => api.moveTask(taskId!, 'Done'),
-    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Done'),
+    ...optimisticTaskMove<void>(setStateOverride, clearStateOverride, () => taskId!, 'Done'),
     onSuccess: () => {
       toast.success('Approved.')
       invalidate()
@@ -202,7 +217,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   })
   const answer = useMutation({
     mutationFn: () => api.answerTask(taskId!, [answerText]),
-    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Inbox'),
+    ...optimisticTaskMove<void>(setStateOverride, clearStateOverride, () => taskId!, 'Inbox'),
     onSuccess: () => {
       toast.success('Answer sent — back to the Planner.')
       setAnswerText('')
@@ -218,7 +233,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
   // any other agent-driven transition.
   const requestChanges = useMutation({
     mutationFn: () => api.requestChanges(taskId!, changesComment),
-    ...optimisticTaskMove<void>(queryClient, () => taskId!, 'Todo'),
+    ...optimisticTaskMove<void>(setStateOverride, clearStateOverride, () => taskId!, 'Todo'),
     onSuccess: () => {
       toast.success('Sent back for another pass.')
       setChangesComment('')
@@ -252,7 +267,10 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
     onError: () => toast.error('Failed to update priority.'),
   })
 
-  const task = taskQuery.data
+  // stateOverride is reconciled/cleared by App.tsx's Board (its own tasksQuery poll
+  // covers every task, including whichever one is open here) - this panel only needs
+  // to merge it in at render time, same as the board's own cards do.
+  const task = taskQuery.data && stateOverride ? { ...taskQuery.data, state: stateOverride } : taskQuery.data
 
   // Founder-requested (docs/013-Frontend.md): pick from the task's own project's
   // existing tags, or create a new one on the fly - both end with the tag attached to
