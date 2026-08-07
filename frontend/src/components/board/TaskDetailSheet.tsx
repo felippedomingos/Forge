@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, ChevronDown, ChevronRight, Circle, DollarSign, ExternalLink, GitBranch, X } from 'lucide-react'
 import { toast } from 'sonner'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetFooter,
   SheetTitle,
-  SheetDescription,
 } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,6 +31,41 @@ import { useTaskWebSocket } from '@/lib/useTaskWebSocket'
 import { RunSessionTranscript } from './RunSessionTranscript'
 
 const CLARIFICATION_EVENT_TYPES = ['PlannerNeedsClarification', 'DeveloperNeedsClarification']
+
+// Founder-requested: Planner/Developer output (Task.description, review comments) is
+// real Markdown (## headers, lists, **bold**, `code`) written by the model, previously
+// rendered as literal text - "## Pergunta do agente" showing up as-is instead of a
+// heading. No @tailwindcss/typography plugin installed, so every element is mapped to
+// this component's own compact text-xs scale by hand rather than pulling in `prose`.
+function MarkdownBody({ children }: { children: string }) {
+  return (
+    <div className="flex flex-col gap-2 text-xs leading-relaxed text-foreground/80 [&_ol]:list-decimal [&_ul]:list-disc [&_ol]:pl-4 [&_ul]:pl-4">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p>{children}</p>,
+          h1: ({ children }) => <h4 className="text-[11px] font-semibold tracking-wide text-foreground uppercase">{children}</h4>,
+          h2: ({ children }) => <h4 className="text-[11px] font-semibold tracking-wide text-foreground uppercase">{children}</h4>,
+          h3: ({ children }) => <h4 className="text-[11px] font-medium text-foreground">{children}</h4>,
+          ul: ({ children }) => <ul className="flex flex-col gap-1">{children}</ul>,
+          ol: ({ children }) => <ol className="flex flex-col gap-1">{children}</ol>,
+          li: ({ children }) => <li>{children}</li>,
+          code: ({ children }) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{children}</code>,
+          pre: ({ children }) => <pre className="overflow-x-auto rounded bg-muted p-2 font-mono text-[11px]">{children}</pre>,
+          a: ({ children, href }) => (
+            <a href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+              {children}
+            </a>
+          ),
+          hr: () => <hr className="border-border/60" />,
+          strong: ({ children }) => <strong className="font-medium text-foreground">{children}</strong>,
+        }}
+      >
+        {children}
+      </Markdown>
+    </div>
+  )
+}
 
 // AgentActivities.cs's RecordEventAsync payloads are free-form JSON per event type -
 // this never throws on malformed/empty strings, it just yields null so callers fall
@@ -296,11 +332,7 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
                 )}
               </div>
               <SheetTitle className="text-left text-base leading-snug">{task.title}</SheetTitle>
-              {task.description && (
-                <SheetDescription className="text-left text-xs leading-relaxed text-foreground/80">
-                  {task.description}
-                </SheetDescription>
-              )}
+              {task.description && <MarkdownBody>{task.description}</MarkdownBody>}
             </SheetHeader>
 
             <div className="flex flex-col gap-5 px-5 py-4">
