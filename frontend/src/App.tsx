@@ -25,7 +25,7 @@ import { TaskCardOverlay } from '@/components/board/TaskCard'
 import { TaskDetailSheet } from '@/components/board/TaskDetailSheet'
 import { ProjectSidebar } from '@/components/board/ProjectSidebar'
 import { LoginScreen } from '@/components/auth/LoginScreen'
-import { api, TASK_STATES, type TaskState } from '@/lib/api'
+import { api, TASK_STATES, type TaskItem, type TaskState } from '@/lib/api'
 import { DROP_TARGETS } from '@/lib/state-config'
 import { AUTH_INVALID_EVENT, getCurrentUser, type AuthUser } from '@/lib/auth'
 
@@ -65,7 +65,31 @@ function Board({ user }: { user: AuthUser }) {
   const invalidateTasks = () => queryClient.invalidateQueries({ queryKey: ['tasks'] })
   const promote = useMutation({ mutationFn: (id: string) => api.promoteTask(id), onSuccess: invalidateTasks })
   const publish = useMutation({ mutationFn: (id: string) => api.moveTask(id, 'Publishing'), onSuccess: invalidateTasks })
-  const approve = useMutation({ mutationFn: (id: string) => api.moveTask(id, 'Done'), onSuccess: invalidateTasks })
+  // Founder-reported: dragging/approving Review->Done had a visible delay that read as
+  // "didn't work" - `/tasks/{id}/move`'s 200 only confirms the Temporal signal was
+  // *delivered*, not that TaskWorkflow has actually processed it and persisted the new
+  // state yet (that happens async, on whatever Worker task-queue slot picks it up next).
+  // The immediate post-mutation invalidateTasks() below was refetching before that
+  // landed, so the card visibly stayed in Review for however long the Worker took.
+  // Optimistic update fixes the *feedback*, not the race itself: Review->Done is a
+  // single deterministic edge (this button/drag target only exists when state is
+  // already Review), so setting it locally is safe - the later invalidateTasks() call
+  // still reconciles with the server's real value once the workflow catches up.
+  const approve = useMutation({
+    mutationFn: (id: string) => api.moveTask(id, 'Done'),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ['tasks'] })
+      const previousTasks = queryClient.getQueryData<TaskItem[]>(['tasks'])
+      queryClient.setQueryData<TaskItem[]>(['tasks'], (old) =>
+        old?.map((t) => (t.id === id ? { ...t, state: 'Done' } : t)),
+      )
+      return { previousTasks }
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previousTasks) queryClient.setQueryData(['tasks'], context.previousTasks)
+    },
+    onSuccess: invalidateTasks,
+  })
   // Same replan action as the "← Rewrite (back to Inbox)" button in TaskDetailSheet -
   // dragging a Backlog card onto Inbox is just another gesture for it.
   const replan = useMutation({ mutationFn: (id: string) => api.requestReplan(id), onSuccess: invalidateTasks })
