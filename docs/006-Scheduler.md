@@ -26,6 +26,8 @@ Three independent caps, all configurable per Project/globally, not hardcoded:
 
 When a cap is hit, tasks simply wait at their current state (`Backlog` unpromoted, or a `Run` queued but not yet started) — this is normal backpressure, not a failure, and should be visible in the UI as "waiting for a slot," not silently invisible.
 
+**The per-project cap's enforcement had a real race, found live (2026-08-07).** `TaskWorkflow.cs`'s Todo→Executing gate (`SchedulingActivities.HasExecutingCapacityAsync`) used to be a bare read-only check — count current `Executing` rows, return `count < max`. Two Todo tasks for the same project calling this at nearly the same instant, with exactly one slot free, could both read the identical pre-write count and both get `true`: the actual `Executing`-state write happens moments *later*, in a separate activity call, well outside this check. Confirmed live: two `DeveloperStarted` events 17ms apart in the same project, which then sat at 3 `Executing` tasks against a configured limit of 2. Rechecking more often wouldn't have helped — only claiming the slot atomically, in the same transaction as the check, does. Fixed by wrapping the check in a per-project Postgres advisory transaction lock (`pg_advisory_xact_lock(hashtext(projectId))`, serializing concurrent callers for the *same* project only — a different project's callers proceed independently) and writing the `Executing` state itself inside that same locked transaction, before releasing it — the second caller's count query then genuinely runs after the first has already committed its claim.
+
 ## 3. Retry and Backoff Policy
 
 Default Temporal activity retry policy (tunable per activity type, not a single global constant):

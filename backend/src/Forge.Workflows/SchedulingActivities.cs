@@ -26,12 +26,27 @@ public static class SchedulingActivities
     // decision (GetSchedulingSnapshotAsync below) was made from a snapshot taken
     // before PromoteToTodoAsync was signaled, so another task can race into
     // Executing between that snapshot and this task actually starting. Rechecking
-    // ExecutingCount here, right before the Executing transition, closes that race.
-    // Reads Project.MaxConcurrentExecuting (same column BacklogSchedulerWorkflow's
-    // ShouldPromote reads via GetSchedulingSnapshotAsync below) rather than its own
-    // constant - found live while merging this in: an earlier draft hardcoded a
-    // separate `MaxConcurrentExecutingPerProject = 2` here, which would have silently
-    // drifted from a project's actual configured limit the moment someone changed it.
+    // ExecutingCount here, right before the Executing transition, was meant to close
+    // that race. Reads Project.MaxConcurrentExecuting (same column
+    // BacklogSchedulerWorkflow's ShouldPromote reads via GetSchedulingSnapshotAsync
+    // below) rather than its own constant - found live while merging this in: an
+    // earlier draft hardcoded a separate `MaxConcurrentExecutingPerProject = 2` here,
+    // which would have silently drifted from a project's actual configured limit the
+    // moment someone changed it.
+    //
+    // Found live (2026-08-07): a bare read-only check here does NOT actually close
+    // the race it exists for. Two Todo tasks for the same project can both call this
+    // when exactly one slot is free - both read the same pre-write count, both get
+    // `true`, both promote (the real Executing-state write happens moments later, in
+    // TaskWorkflow.cs's own SetStateAsync call, well outside this activity). Confirmed
+    // live: two DeveloperStarted events 17ms apart in the same project, and that
+    // project sitting at 3 Executing tasks against a MaxConcurrentExecuting of 2.
+    // Rechecking more often doesn't help - only claiming the slot atomically, in the
+    // same transaction as the check, does. A per-project Postgres advisory
+    // transaction lock (`pg_advisory_xact_lock(hashtext(projectId))`) serializes
+    // concurrent callers for the SAME project (a different project's callers proceed
+    // independently) - the second caller's count query then runs only after the
+    // first has already committed its claim, so it correctly sees the slot as taken.
     [Activity]
     public static async Task<bool> HasExecutingCapacityAsync(Guid taskId)
     {
@@ -46,10 +61,28 @@ public static class SchedulingActivities
             .Select(t => new { t.ProjectId, MaxConcurrentExecuting = t.Project!.MaxConcurrentExecuting })
             .FirstAsync();
 
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({task.ProjectId.ToString()}))");
+
         var executingCount = await db.Tasks
             .CountAsync(t => t.ProjectId == task.ProjectId && t.State == TaskState.Executing);
 
-        return executingCount < task.MaxConcurrentExecuting;
+        if (executingCount >= task.MaxConcurrentExecuting)
+        {
+            await tx.RollbackAsync();
+            return false;
+        }
+
+        // Claim the slot now, inside the lock - TaskWorkflow.cs's own SetStateAsync
+        // call right after this returns true is a harmless, idempotent re-write of
+        // the same value (it also fires the NOTIFY the frontend's WebSocket listens
+        // for, unchanged).
+        await db.Tasks.Where(t => t.Id == taskId).ExecuteUpdateAsync(s => s
+            .SetProperty(t => t.State, TaskState.Executing)
+            .SetProperty(t => t.UpdatedAt, DateTimeOffset.UtcNow));
+        await tx.CommitAsync();
+        return true;
     }
 
     [Activity]
