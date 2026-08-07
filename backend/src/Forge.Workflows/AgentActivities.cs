@@ -43,7 +43,15 @@ public static class AgentActivities
     private record DeveloperLlmResponse(
         [property: JsonPropertyName("needsClarification")] bool NeedsClarification,
         [property: JsonPropertyName("summary")] string? Summary,
-        [property: JsonPropertyName("questions")] List<string>? Questions);
+        [property: JsonPropertyName("questions")] List<string>? Questions,
+        // Founder-requested (2026-08-07): "sempre que terminar algo, fortalecer a
+        // memoria do projeto" - every finished task is a chance to record something
+        // the Developer just learned about THIS codebase for a future task to read
+        // (docs/005-Agents.md §7). Both optional and expected to be null/empty most
+        // of the time - not every task reveals something worth remembering, and this
+        // must never be forced just to fill the field.
+        [property: JsonPropertyName("memoryKey")] string? MemoryKey,
+        [property: JsonPropertyName("memoryNote")] string? MemoryNote);
 
     // workingDirectory is whatever path ClaudeCliProvider.InvokeAsync actually ran
     // against (localPath for Planner/Prioritizer, worktreePath for Developer) - needed
@@ -395,9 +403,16 @@ public static class AgentActivities
             If you are missing information only a human can provide, make no changes and
             list clarifying questions instead of guessing.
 
+            Separately: if this task revealed something about THIS specific codebase
+            that would genuinely help on a future, unrelated task here - a non-obvious
+            convention, a gotcha, a decision and the reason behind it - record it as a
+            memory note (short kebab-case key, one to three sentence note). Most tasks
+            don't reveal anything like this; leave both null rather than forcing a note
+            that just restates what reading the code fresh would already show.
+
             When done, respond with ONLY a single JSON object, no other text, no markdown
             fences, matching exactly this shape:
-            {"needsClarification": boolean, "summary": string or null, "questions": string array}
+            {"needsClarification": boolean, "summary": string or null, "questions": string array, "memoryKey": string or null, "memoryNote": string or null}
             """;
 
         var cliResult = await ClaudeCliProvider.InvokeAsync(prompt, worktreePath, bypassPermissions: true);
@@ -442,7 +457,46 @@ public static class AgentActivities
         await RecordEventAsync(db, taskId, "DeveloperCompleted", AgentRole.Developer,
             new { summary = parsed.Summary });
 
+        // Founder-requested (2026-08-07): "sempre que terminar algo, fortalecer a
+        // memoria do projeto" - upserts by key (same semantics as
+        // PUT /projects/{id}/memory) so a later task correcting/refining an earlier
+        // note overwrites it rather than accumulating duplicates. Deliberately best-
+        // effort: a malformed key/note here should never fail the task itself, this
+        // is a bonus on top of already-successful work, not a required step.
+        if (!string.IsNullOrWhiteSpace(parsed.MemoryKey) && !string.IsNullOrWhiteSpace(parsed.MemoryNote))
+        {
+            await UpsertMemoryAsync(db, task.ProjectId, parsed.MemoryKey.Trim(), parsed.MemoryNote.Trim());
+            await RecordEventAsync(db, taskId, "MemoryStrengthened", AgentRole.Developer,
+                new { key = parsed.MemoryKey.Trim(), note = parsed.MemoryNote.Trim() });
+        }
+
         return new DeveloperResult(false, []);
+    }
+
+    // Same upsert-by-(ProjectId, Key) semantics as Forge.Api's PUT /projects/{id}/memory
+    // - kept here too since AgentActivities has no dependency on Forge.Api to reuse
+    // that endpoint's own handler directly.
+    private static async Task UpsertMemoryAsync(ForgeDbContext db, Guid projectId, string key, string value)
+    {
+        var existing = await db.AgentMemories.FirstOrDefaultAsync(m => m.ProjectId == projectId && m.Key == key);
+        if (existing is not null)
+        {
+            existing.Value = value;
+            existing.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+        else
+        {
+            db.AgentMemories.Add(new AgentMemory
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = projectId,
+                AgentRole = AgentRole.Planner, // stable default - docs/005-Agents.md §7, memory is project-wide, not per-role
+                Key = key,
+                Value = value,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+        await db.SaveChangesAsync();
     }
 
     private record PublishRecipeDto(

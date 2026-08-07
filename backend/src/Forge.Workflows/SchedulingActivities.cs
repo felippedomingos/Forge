@@ -220,3 +220,87 @@ public static class SchedulingActivities
         return lastType == Temporalio.Api.Enums.V1.EventType.WorkflowTaskFailed;
     }
 }
+
+public record SchedulerHealthCheckResult(List<Guid> ProjectIds, int RestartedSchedulers);
+
+// docs/006-Scheduler.md §4a's own auto-recovery only runs from inside a project's
+// BacklogSchedulerWorkflow - found live (2026-08-07) that this makes the whole
+// safeguard's uptime entirely dependent on that one workflow's uptime: 7 SlayZone
+// project schedulers were deliberately terminated earlier in the same session (to stop
+// a real over-promotion incident, docs/016-Roadmap.md) and never restarted, so
+// RecoverStuckTasksAsync simply never ran again for any of them - two tasks sat stuck
+// for 2.5+ hours with zero recovery attempted, the exact failure this class of
+// safeguard exists to prevent. GlobalWatchdogWorkflow (this file's sibling) calls this
+// on a fixed interval, independent of any single project's scheduler.
+public static class GlobalWatchdogActivities
+{
+    private static string ConnectionString =>
+        Environment.GetEnvironmentVariable("FORGE_CONNECTION_STRING")
+        ?? "Host=localhost;Port=5432;Database=forge;Username=forge;Password=forge_local_dev";
+
+    [Activity]
+    public static async Task<SchedulerHealthCheckResult> EnsureSchedulersRunningAsync()
+    {
+        var options = new DbContextOptionsBuilder<ForgeDbContext>()
+            .UseNpgsql(ConnectionString)
+            .UseSnakeCaseNamingConvention()
+            .Options;
+        await using var db = new ForgeDbContext(options);
+
+        var projectIds = await db.Projects.Select(p => p.Id).ToListAsync();
+        if (projectIds.Count == 0) return new SchedulerHealthCheckResult(projectIds, 0);
+
+        var client = await TemporalClient.ConnectAsync(new TemporalClientConnectOptions
+        {
+            TargetHost = Environment.GetEnvironmentVariable("TEMPORAL_ADDRESS") ?? "localhost:7233",
+            Namespace = "default",
+        });
+
+        var restarted = 0;
+        foreach (var projectId in projectIds)
+        {
+            var workflowId = $"scheduler-{projectId}";
+            var handle = client.GetWorkflowHandle(workflowId);
+
+            bool needsStart;
+            try
+            {
+                var description = await handle.DescribeAsync();
+                needsStart = description.Status is WorkflowExecutionStatus.Failed
+                    or WorkflowExecutionStatus.Terminated or WorkflowExecutionStatus.TimedOut
+                    or WorkflowExecutionStatus.Canceled;
+            }
+            catch (Exception)
+            {
+                needsStart = true; // never started at all (e.g. an older project row predating this workflow)
+            }
+
+            if (!needsStart) continue;
+
+            try
+            {
+                await client.StartWorkflowAsync(
+                    (BacklogSchedulerWorkflow wf) => wf.RunAsync(projectId),
+                    new WorkflowOptions(workflowId, "forge-task-queue"));
+            }
+            catch (Exception)
+            {
+                continue; // race - already running after all
+            }
+
+            db.Events.Add(new DomainEvent
+            {
+                Id = Guid.NewGuid(),
+                TaskId = null, // system-level, not scoped to one task - docs/003-Domain.md §1
+                Type = "SchedulerAutoRecovered",
+                Payload = System.Text.Json.JsonSerializer.Serialize(new { projectId }),
+                OccurredAt = DateTimeOffset.UtcNow,
+                Actor = "system:global-watchdog",
+            });
+            restarted++;
+        }
+
+        if (restarted > 0) await db.SaveChangesAsync();
+        return new SchedulerHealthCheckResult(projectIds, restarted);
+    }
+}

@@ -128,6 +128,27 @@ app.UseAuthorization();
 const string TaskQueue = "forge-task-queue";
 static string WorkflowIdFor(Guid taskId) => $"task-{taskId}";
 
+// Founder-requested (2026-08-07) safeguard: GlobalWatchdogWorkflow.cs's own comment
+// explains why one single global instance exists, independent of any project's own
+// scheduler. Started here, on every Api boot, with a fixed workflow ID - the
+// `catch` below is what makes this idempotent (a second Api instance, or a restart
+// while it's already running, just hits Temporal's default WorkflowIdReusePolicy
+// refusing to double-start over an open execution, which is exactly the outcome
+// wanted here, not an error worth surfacing).
+{
+    var temporalClient = app.Services.GetRequiredService<TemporalClient>();
+    try
+    {
+        await temporalClient.StartWorkflowAsync(
+            (GlobalWatchdogWorkflow wf) => wf.RunAsync(),
+            new WorkflowOptions("global-watchdog", TaskQueue));
+    }
+    catch (Exception)
+    {
+        // Already running - the common case on every restart after the first.
+    }
+}
+
 static string IssueJwt(User user, SymmetricSecurityKey signingKey)
 {
     var claims = new[]

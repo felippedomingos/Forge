@@ -54,6 +54,17 @@ This session hit three separate real incidents where a `TaskWorkflow` died outri
 
 `Blocked`/`AwaitingPublish`/`Publishing`/`Review` are never touched by the staleness check — those legitimately wait on a human for as long as it takes, and "hasn't moved in 15 minutes" is completely normal there, not a bug. Every recovery is recorded as an `AutoRecovered` event ([[003-Domain]]) with the prior status and reason, so it's auditable from the task's own timeline.
 
+## 4b. Global Watchdog (found necessary live, 2026-08-07)
+
+§4a's safeguard has a single point of failure: it only ever runs from *inside* a project's own `BacklogSchedulerWorkflow`, so its uptime is entirely dependent on that one workflow's uptime. Found live: 7 SlayZone-imported project schedulers ([[016-Roadmap]]) had been deliberately terminated earlier in the same session (to stop a real over-promotion incident) and never restarted — their §4a safeguard silently stopped running with them, and two tasks in one of those projects sat genuinely stuck (their `TaskWorkflow`s had actually `Failed`) for 2.5+ hours with zero recovery attempted, the exact failure class §4a exists to prevent.
+
+`GlobalWatchdogWorkflow` — one single global instance (fixed workflow ID `"global-watchdog"`), started once from `Forge.Api`'s own startup (idempotent: a second start attempt just hits Temporal's default `WorkflowIdReusePolicy` refusing to double-start over an open execution, silently caught) — runs independent of any project's own scheduler, every 5 minutes:
+
+1. **Restarts any project's scheduler that's dead** (`GlobalWatchdogActivities.EnsureSchedulersRunningAsync`) — the actual root cause fix: a dead scheduler also stops backlog promotion/prioritization for that project, not just stuck-task recovery. Recorded as a `SchedulerAutoRecovered` event ([[003-Domain]]), system-level (`TaskId` null, `Actor` `system:global-watchdog`).
+2. **Calls `RecoverStuckTasksAsync` directly for every project**, regardless of whether its scheduler is currently healthy — genuine defense in depth: this alone would have caught the incident above even without restarting anything, and covers a scheduler whose top-level Temporal status is `Running` but is internally wedged for some other reason §4a's own mechanism wouldn't otherwise reach.
+
+Deliberately a *separate* workflow rather than folding into §4a's per-project loop — a global concern (project schedulers, plural) shouldn't live inside any one project's own workflow, or fixing one project's scheduler would depend on a *different* project's scheduler happening to still be alive.
+
 ## 5. Open Questions
 
 - Should per-project concurrency limits be a static config value or dynamically tunable from the UI? Leaning towards a simple per-Project setting exposed in [[013-Frontend]], not invented further here.

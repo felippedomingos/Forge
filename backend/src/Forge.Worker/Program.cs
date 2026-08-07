@@ -24,6 +24,7 @@ using var worker = new TemporalWorker(client, new TemporalWorkerOptions("forge-t
     {
         WorkflowDefinition.Create(typeof(TaskWorkflow)),
         WorkflowDefinition.Create(typeof(BacklogSchedulerWorkflow)),
+        WorkflowDefinition.Create(typeof(GlobalWatchdogWorkflow)),
     },
     Activities =
     {
@@ -39,6 +40,7 @@ using var worker = new TemporalWorker(client, new TemporalWorkerOptions("forge-t
         ActivityDefinition.Create(SchedulingActivities.GetSchedulingSnapshotAsync),
         ActivityDefinition.Create(SchedulingActivities.HasExecutingCapacityAsync),
         ActivityDefinition.Create(SchedulingActivities.RecoverStuckTasksAsync),
+        ActivityDefinition.Create(GlobalWatchdogActivities.EnsureSchedulersRunningAsync),
     }
 });
 
