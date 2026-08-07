@@ -905,7 +905,12 @@ public static class AgentActivities
         try
         {
             using var doc = JsonDocument.Parse(latest.Payload);
-            return doc.RootElement.GetProperty("comment").GetString();
+            // Found live: an older/malformed payload missing "comment" entirely (e.g.
+            // the PascalCase "Comment" serialization bug, since fixed at the write
+            // site) must never kill this activity - GetProperty throws
+            // KeyNotFoundException, not JsonException, so TryGetProperty is the only
+            // safe way to read an event payload whose shape isn't fully trusted.
+            return doc.RootElement.TryGetProperty("comment", out var comment) ? comment.GetString() : null;
         }
         catch (JsonException)
         {

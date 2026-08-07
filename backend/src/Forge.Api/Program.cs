@@ -769,7 +769,15 @@ app.MapPost("/tasks/{id:guid}/request-changes", async (ForgeDbContext db, Tempor
         Id = Guid.NewGuid(),
         TaskId = id,
         Type = "ReviewRequestedChanges",
-        Payload = System.Text.Json.JsonSerializer.Serialize(new { request.Comment }),
+        // camelCase explicitly - same bug class as the PublishRecipe fix (docs/015-
+        // Deployment.md §2): a raw JsonSerializer.Serialize call doesn't go through
+        // ConfigureHttpJsonOptions, so it defaults to PascalCase ("Comment"), which
+        // AgentActivities.GetLatestReviewFeedbackAsync's GetProperty("comment") then
+        // can't find - found live, this silently killed every Review->Todo rework
+        // workflow that ever reached DevelopAsync (KeyNotFoundException, not caught,
+        // 5 retries then the whole TaskWorkflow died).
+        Payload = System.Text.Json.JsonSerializer.Serialize(new { request.Comment },
+            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }),
         OccurredAt = DateTimeOffset.UtcNow,
         Actor = $"user:{principal.FindFirstValue(ClaimTypes.NameIdentifier)}",
     });
