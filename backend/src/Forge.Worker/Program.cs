@@ -33,6 +33,7 @@ using var worker = new TemporalWorker(client, new TemporalWorkerOptions("forge-t
         ActivityDefinition.Create(AgentActivities.GitFinalizeAsync),
         ActivityDefinition.Create(AgentActivities.HasPullRequestAsync),
         ActivityDefinition.Create(AgentActivities.CheckPullRequestMergedAsync),
+        ActivityDefinition.Create(AgentActivities.IsAlreadyIntegratedAsync),
         ActivityDefinition.Create(AgentActivities.PrioritizeAsync),
         ActivityDefinition.Create(PersistenceActivities.PersistTaskStateAsync),
         ActivityDefinition.Create(SchedulingActivities.GetSchedulingSnapshotAsync),

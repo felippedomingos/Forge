@@ -290,6 +290,24 @@ public class TaskWorkflow
                 DefaultActivityOptions);
         }
 
+        // Founder-requested (2026-08-07, FORGE-28, docs/015-Deployment.md §3a):
+        // GitFinalizeAsync's own merge-conflict/already-integrated logic may have
+        // determined this task's branch never needed a PR at all (its commits already
+        // reached the root branch some other way). Workflow.Patched-gated - a brand
+        // new activity call, so old open executions that already ran GitFinalizeAsync
+        // before this existed safely skip it and fall through to the polling loop
+        // exactly as before, rather than risking a replay mismatch.
+        if (Workflow.Patched("skip-production-poll-if-already-integrated"))
+        {
+            var alreadyIntegrated = await Workflow.ExecuteActivityAsync(
+                () => AgentActivities.IsAlreadyIntegratedAsync(taskId),
+                PersistActivityOptions);
+            if (alreadyIntegrated)
+            {
+                _productionConfirmed = true;
+            }
+        }
+
         // docs/003-Domain.md row 10 / docs/015-Deployment.md §4 (resolved): poll the
         // PR's own merge status directly instead of waiting on an undesigned webhook.
         // The manual ConfirmProductionAsync signal still works too (e.g. a project

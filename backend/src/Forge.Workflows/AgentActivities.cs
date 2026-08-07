@@ -940,7 +940,30 @@ public static class AgentActivities
         await RecordEventAsync(db, taskId, "GitPushed", AgentRole.Git,
             new { branch = task.BranchName, success = push.Success, stderr = push.Success ? null : push.Stderr });
 
+        var alreadyIntegrated = false;
         if (push.Success)
+        {
+            // Found live (2026-08-07, FORGE-28): docs/015-Deployment.md §3a's
+            // Deploy-merges-into-LocalPath step, combined with LocalPath's own `main`
+            // getting pushed to origin by some other means (this session: the founder
+            // dogfooding Forge directly pushes LocalPath's main after resolving things
+            // by hand), can mean this task's branch is already an ancestor of origin's
+            // root branch by the time GitFinalizeAsync runs - `gh pr create` then fails
+            // outright ("No commits between main and <branch>"), and the task used to
+            // sit in Done forever with no PullRequestUrl and nothing to poll. Checking
+            // this BEFORE attempting PR creation - provider-agnostic (a plain git
+            // ancestry check, not a provider-specific error string) - lets Deploy skip
+            // straight to "no PR needed, this is already shipped" instead.
+            var ancestryCheck = await GitOps.RunAsync(worktreePath, "merge-base", "--is-ancestor", task.BranchName, $"origin/{project?.RootBranch}");
+            alreadyIntegrated = ancestryCheck.Success;
+        }
+
+        if (alreadyIntegrated)
+        {
+            await RecordEventAsync(db, taskId, "GitBranchAlreadyIntegrated", AgentRole.Git,
+                new { branch = task.BranchName, rootBranch = project?.RootBranch, note = "branch's commits are already reachable from the root branch - no PR needed" });
+        }
+        else if (push.Success)
         {
             var isAzureDevOps = project?.GitProviderPlugin?.Name == "azure-devops";
             GitCommandResult pr;
@@ -994,6 +1017,23 @@ public static class AgentActivities
                     new { success = false, stderr = remove.Stderr });
             }
         }
+
+    }
+
+    // docs/015-Deployment.md §4/§3a - separate, additive query rather than changing
+    // GitFinalizeAsync's own return type: TaskWorkflow's Done->Production step already
+    // has open (currently-running) executions with a completed GitFinalizeAsync
+    // recorded in their history from before this existed. Changing that activity's
+    // return type would force replay to deserialize an old (void) result against a new
+    // non-nullable shape - the same class of failure the Workflow.Patched pattern
+    // elsewhere in this codebase exists to avoid. A brand-new activity call, gated by
+    // Workflow.Patched in TaskWorkflow, is free of that risk: old histories simply
+    // never schedule it and fall through to the pre-existing polling behavior.
+    [Activity]
+    public static async Task<bool> IsAlreadyIntegratedAsync(Guid taskId)
+    {
+        await using var db = OpenDb();
+        return await db.Events.AnyAsync(e => e.TaskId == taskId && e.Type == "GitBranchAlreadyIntegrated");
     }
 
     // docs/015-Deployment.md §4 - resolves the previously-undesigned CI/CD integration
