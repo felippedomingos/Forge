@@ -267,8 +267,11 @@ export function TaskDetailSheet({ taskId, onClose }: { taskId: string | null; on
     <Sheet open={!!taskId} onOpenChange={(open) => !open && onClose()}>
       {/* Founder feedback: fine for this to take up real space while tracking a live
           run - up to half the screen on wide viewports, not the narrow fixed width
-          dialogs use. */}
-      <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-[50vw]">
+          dialogs use. Must override via the same `data-[side=right]` variant the base
+          Sheet component uses for its own `sm:max-w-sm` - a plain `sm:max-w-[50vw]`
+          here has lower CSS specificity than that data-attribute-qualified rule and
+          silently lost every time, no matter the source order. */}
+      <SheetContent className="w-full gap-0 overflow-y-auto data-[side=right]:sm:max-w-[50vw]">
         {!task && (
           <div className="flex flex-col gap-4 p-6">
             <Skeleton className="h-6 w-3/4" />
