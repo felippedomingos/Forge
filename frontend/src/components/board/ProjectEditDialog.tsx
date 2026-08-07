@@ -23,9 +23,10 @@ import { BranchSelect } from './BranchSelect'
 
 // docs/003-Domain.md / docs/005-Agents.md §7 - founder-requested: each project's repo
 // link and shared memory must be editable in one place, not scattered across raw API
-// calls. Repository URL/branch/local checkout here; memory (read by every agent role
-// regardless of who wrote it) below, since agents actually read this at plan/develop
-// time - it's not just descriptive metadata.
+// calls. Repository URL/branch/local checkout here; memory (read by every LLM call
+// made on this project's tasks - Planner, Developer, Prioritizer, Deploy's AI
+// conflict resolution - regardless of who wrote it) below, since agents actually read
+// this before acting - it's not just descriptive metadata.
 export function ProjectEditDialog({
   project,
   open,

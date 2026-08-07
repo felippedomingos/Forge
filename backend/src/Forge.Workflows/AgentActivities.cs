@@ -750,10 +750,22 @@ public static class AgentActivities
         await RecordEventAsync(db, taskId, "DeployConflictDetected", AgentRole.Deploy,
             new { branch = task.BranchName, conflictedFiles = fileList.Split('\n') });
 
+        // Founder-requested (2026-08-07, docs/005-Agents.md §7): every LLM-invoking
+        // activity for a project reads its shared memory, not just Planner/Developer -
+        // this is the one place Deploy itself calls an LLM (the rest of DeployAsync is
+        // deterministic PublishRecipe execution), and a resolution decision ("this
+        // project always keeps the migration branch's version of appsettings.json")
+        // is exactly the kind of standing guidance memory exists for.
+        var memory = await FormatMemoryAsync(db, task.ProjectId);
         var prompt = $$"""
             You are the Deploy agent inside Forge, resolving a real git merge conflict
             in a live checkout (Project.LocalPath - this is the founder's own working
             directory, not a disposable worktree).
+
+            Shared project memory (notes accumulated across prior tasks on this
+            project - conventions, decisions, gotchas; treat as authoritative context
+            alongside the repository itself):
+            {{memory}}
 
             `git merge {{task.BranchName}}` is currently in progress and stopped on a
             conflict in these files:
@@ -1143,12 +1155,23 @@ public static class AgentActivities
             return;
         }
 
+        // Founder-requested (2026-08-07, docs/005-Agents.md §7): every LLM-invoking
+        // activity for a project reads its shared memory, not just Planner/Developer -
+        // a priority call ("always ship compliance-flagged work first", "this
+        // project's Mondays are frozen for releases") is exactly the kind of standing
+        // guidance memory exists for.
+        var memory = await FormatMemoryAsync(db, projectId);
         var taskList = string.Join("\n", backlogTasks.Select(t => $"- {t.Id}: {t.Title}"));
         var prompt = $$"""
             You are the Prioritizer agent inside Forge. Order the following backlog
             tasks for this project by importance/impact, most important first. Use
             your judgment about the project based on the repository in the current
             working directory; if nothing distinguishes them, keep the given order.
+
+            Shared project memory (notes accumulated across prior tasks on this
+            project - conventions, decisions, gotchas; treat as authoritative context
+            alongside the repository itself):
+            {{memory}}
 
             Tasks:
             {{taskList}}
