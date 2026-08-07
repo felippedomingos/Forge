@@ -453,7 +453,12 @@ public static class AgentActivities
         // to eyeball the result once a task reaches Review. Never read by DeployAsync
         // itself (unlike healthCheckUrl, which is for an automated check that isn't
         // implemented yet either) - this field only exists for the frontend button.
-        [property: JsonPropertyName("previewUrl")] string? PreviewUrl);
+        [property: JsonPropertyName("previewUrl")] string? PreviewUrl,
+        // docs/015-Deployment.md §3a - founder-requested: run after AI-resolving a
+        // merge conflict in LocalPath, before committing it. Optional - a project
+        // without one still gets the baseline git-level safety checks (no unmerged
+        // paths, no leftover conflict markers), just not a real build+test gate.
+        [property: JsonPropertyName("conflictResolutionVerifyCommand")] string? ConflictResolutionVerifyCommand);
 
     // Found live (2026-08-06): a `restartTargets` command that backgrounds a detached
     // process (scripts/restart-forge-dev.sh's own bug, since fixed) can leave a
@@ -660,10 +665,28 @@ public static class AgentActivities
                     }
 
                     var merge = await RunShellAsync(localPath, $"git merge --no-edit {task.BranchName}");
-                    await RecordEventAsync(db, taskId, merge.Success ? "DeployBranchMerged" : "DeployFailed", AgentRole.Deploy,
-                        new { branch = task.BranchName, output = Truncate(merge.Output, 1000) });
-                    if (!merge.Success)
+                    if (merge.Success)
                     {
+                        await RecordEventAsync(db, taskId, "DeployBranchMerged", AgentRole.Deploy,
+                            new { branch = task.BranchName, output = Truncate(merge.Output, 1000) });
+                    }
+                    else if (merge.Output.Contains("CONFLICT"))
+                    {
+                        // Founder-requested (2026-08-07): a merge conflict here used to
+                        // always fail Deploy outright, needing a human (or me) to resolve
+                        // it by hand every time two tasks touched the same file. Try an
+                        // AI resolution first - only committed if it passes real
+                        // verification, never blindly trusted.
+                        var resolved = await TryResolveMergeConflictAsync(db, taskId, task, localPath, recipe);
+                        if (!resolved)
+                        {
+                            return new DeployResult(false, $"Merging '{task.BranchName}' into LocalPath hit a conflict that AI resolution could not safely resolve - see the task's events for details.");
+                        }
+                    }
+                    else
+                    {
+                        await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                            new { branch = task.BranchName, output = Truncate(merge.Output, 1000) });
                         await RunShellAsync(localPath, "git merge --abort");
                         return new DeployResult(false, $"Merging '{task.BranchName}' into LocalPath failed: {Truncate(merge.Output, 500)}");
                     }
@@ -700,6 +723,128 @@ public static class AgentActivities
             deployLock.Release();
         }
     }
+
+    // Founder-requested (2026-08-07, docs/015-Deployment.md §3a): DeployAsync's own
+    // git merge into Project.LocalPath hit a real conflict (two tasks touching the same
+    // file) - try resolving it with Claude Code instead of always failing outright and
+    // needing a human. Never trusted blindly: only ever commits the merge if the
+    // resolution passes real verification (no leftover conflict markers, no unmerged
+    // paths, and the project's own configured build/test command if one exists).
+    // Any failure aborts the merge cleanly - LocalPath is left exactly as it was before
+    // this method ran, same as the pre-existing conflict-always-fails behavior.
+    private static async Task<bool> TryResolveMergeConflictAsync(ForgeDbContext db, Guid taskId, TaskItem task, string localPath, PublishRecipeDto? recipe)
+    {
+        var conflictedFiles = await RunShellAsync(localPath, "git diff --name-only --diff-filter=U");
+        var fileList = conflictedFiles.Output.Trim();
+        if (string.IsNullOrWhiteSpace(fileList))
+        {
+            // git reported CONFLICT but the diff-filter query found nothing conflicted
+            // (e.g. a submodule or binary-file conflict outside this method's scope) -
+            // don't guess, fail the same way an unrecognized conflict always did.
+            await RunShellAsync(localPath, "git merge --abort");
+            await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                new { reason = "merge reported a conflict but no text-conflicted files were found - not attempting AI resolution", branch = task.BranchName });
+            return false;
+        }
+
+        await RecordEventAsync(db, taskId, "DeployConflictDetected", AgentRole.Deploy,
+            new { branch = task.BranchName, conflictedFiles = fileList.Split('\n') });
+
+        var prompt = $$"""
+            You are the Deploy agent inside Forge, resolving a real git merge conflict
+            in a live checkout (Project.LocalPath - this is the founder's own working
+            directory, not a disposable worktree).
+
+            `git merge {{task.BranchName}}` is currently in progress and stopped on a
+            conflict in these files:
+            {{fileList}}
+
+            Resolve the conflict(s) directly in these files, preserving the intent of
+            BOTH sides wherever they represent independent, compatible changes (e.g. two
+            unrelated additions near the same line) - do not simply pick one side and
+            discard the other unless they are genuinely mutually exclusive. Do not touch
+            any file outside this list, and do not make any other change beyond
+            resolving the conflict markers. Run `git add` on each resolved file when
+            done. Do NOT run `git commit` - Forge finalizes the merge itself after
+            verifying your resolution.
+
+            When done, respond with ONLY a single JSON object, no other text, no
+            markdown fences, matching exactly this shape:
+            {"resolved": boolean, "summary": string}
+            Set "resolved": false if any conflict couldn't be safely resolved (e.g. the
+            two sides are genuinely incompatible) - in that case, leave the files as you
+            found them; Forge will abort the merge.
+            """;
+
+        ClaudeCliResult cliResult;
+        try
+        {
+            cliResult = await ClaudeCliProvider.InvokeAsync(prompt, localPath, bypassPermissions: true);
+        }
+        catch (Exception ex)
+        {
+            await RunShellAsync(localPath, "git merge --abort");
+            await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                new { reason = "conflict-resolution model invocation failed", error = ex.Message });
+            return false;
+        }
+
+        var parsed = TryParseLlmJson<ConflictResolutionLlmResponse>(cliResult.Text);
+        await RecordRunAsync(db, taskId, AgentRole.Deploy, cliResult, localPath,
+            parsed is { Resolved: true } ? RunStatus.Success : RunStatus.Failed);
+
+        if (parsed is null || !parsed.Resolved)
+        {
+            await RunShellAsync(localPath, "git merge --abort");
+            await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                new { reason = "AI conflict resolution declined or gave an unparseable response", rawResponse = Truncate(cliResult.Text, 1000) });
+            return false;
+        }
+
+        // Baseline safety, enforced regardless of any per-project verify command: the
+        // resolution must have actually left no unmerged paths and no leftover
+        // "<<<<<<<"-style markers in the working tree. `git diff --check` is git's own
+        // built-in detector for exactly the latter.
+        var remainingConflicts = await RunShellAsync(localPath, "git diff --check");
+        var unmergedStatus = await RunShellAsync(localPath, "git status --porcelain=v1");
+        var stillUnmerged = unmergedStatus.Output.Split('\n').Any(line =>
+            line.Length >= 2 && (line[0] == 'U' || line[1] == 'U' || line.StartsWith("AA") || line.StartsWith("DD")));
+
+        if (!remainingConflicts.Success || stillUnmerged)
+        {
+            await RunShellAsync(localPath, "git merge --abort");
+            await RecordEventAsync(db, taskId, "DeployFailed", AgentRole.Deploy,
+                new { reason = "AI resolution left unmerged paths or leftover conflict markers", summary = parsed.Summary, output = Truncate(remainingConflicts.Output, 1000) });
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(recipe?.ConflictResolutionVerifyCommand))
+        {
+            var verify = await RunShellAsync(localPath, recipe.ConflictResolutionVerifyCommand);
+            await RecordEventAsync(db, taskId, verify.Success ? "DeployConflictVerified" : "DeployFailed", AgentRole.Deploy,
+                new { command = recipe.ConflictResolutionVerifyCommand, output = Truncate(verify.Output, 1000) });
+            if (!verify.Success)
+            {
+                await RunShellAsync(localPath, "git merge --abort");
+                return false;
+            }
+        }
+
+        var commit = await RunShellAsync(localPath, "git commit --no-edit");
+        await RecordEventAsync(db, taskId, commit.Success ? "DeployBranchMerged" : "DeployFailed", AgentRole.Deploy,
+            new { branch = task.BranchName, aiResolved = true, summary = parsed.Summary, output = Truncate(commit.Output, 1000) });
+        if (!commit.Success)
+        {
+            await RunShellAsync(localPath, "git merge --abort");
+            return false;
+        }
+
+        return true;
+    }
+
+    private record ConflictResolutionLlmResponse(
+        [property: JsonPropertyName("resolved")] bool Resolved,
+        [property: JsonPropertyName("summary")] string? Summary);
 
     // docs/015-Deployment.md §4 / TaskWorkflow's resume-from-state path - GitFinalizeAsync
     // isn't safely re-runnable (it'd push+`pr create` again), so a resumed workflow

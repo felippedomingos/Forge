@@ -106,6 +106,7 @@ export function ProjectEditDialog({
         restartTargets: current?.restartTargets ?? null,
         healthCheckUrl: current?.healthCheckUrl ?? null,
         previewUrl: previewUrl || null,
+        conflictResolutionVerifyCommand: current?.conflictResolutionVerifyCommand ?? null,
       })
     },
     onSuccess: () => {

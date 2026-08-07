@@ -52,6 +52,10 @@ export interface PublishRecipe {
   restartTargets: string[] | null
   healthCheckUrl: string | null
   previewUrl: string | null
+  // docs/015-Deployment.md §3a - run after AI-resolving a merge conflict in LocalPath,
+  // before committing it. No frontend affordance yet - configured via the API
+  // directly, same as migrationCommand/restartTargets.
+  conflictResolutionVerifyCommand: string | null
 }
 
 export function parsePublishRecipe(raw: string | null): PublishRecipe | null {
