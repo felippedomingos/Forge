@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon, DollarSign, LogOut } from 'lucide-react'
+import { FolderGit2, ListTodo, Pencil, Flame, Sun, Moon, DollarSign, LogOut, ChevronDown, ChevronRight } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -32,6 +32,20 @@ export function ProjectSidebar({
 }) {
   const { theme, toggleTheme } = useTheme()
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
+  // Founder-requested: the SlayZone import (docs/016-Roadmap.md) took the Projects list
+  // from ~1 to 9 overnight, worth collapsing out of the way most of the time. Persisted
+  // per-browser (not per-project state) since it's a pure display preference - starts
+  // expanded so a first-time/cleared-storage view isn't missing projects by surprise.
+  const [projectsCollapsed, setProjectsCollapsed] = useState(
+    () => localStorage.getItem('forge:projects-collapsed') === 'true',
+  )
+  const toggleProjectsCollapsed = () => {
+    setProjectsCollapsed((prev) => {
+      const next = !prev
+      localStorage.setItem('forge:projects-collapsed', String(next))
+      return next
+    })
+  }
   // Founder-requested: a global spend indicator. Polls rather than reacting to the
   // WebSocket (docs/007-ExecutionEngine.md §4 is per-task, not board-wide) - 15s is
   // frequent enough for a figure that only moves when a Run completes.
@@ -70,12 +84,24 @@ export function ProjectSidebar({
 
       <div className="flex flex-col gap-0.5">
         <div className="flex items-center justify-between px-2 py-1">
-          <p className="text-[10px] font-medium tracking-wide text-muted-foreground/70 uppercase">
+          <button
+            onClick={toggleProjectsCollapsed}
+            className="flex items-center gap-1 text-[10px] font-medium tracking-wide text-muted-foreground/70 uppercase hover:text-muted-foreground"
+            aria-expanded={!projectsCollapsed}
+          >
+            {projectsCollapsed ? (
+              <ChevronRight className="size-3 shrink-0" />
+            ) : (
+              <ChevronDown className="size-3 shrink-0" />
+            )}
             Projects
-          </p>
+            <Badge variant="secondary" className="rounded-full px-1.5 text-[10px] normal-case">
+              {projects.length}
+            </Badge>
+          </button>
           <CreateProjectDialog />
         </div>
-        {projects.map((project) => (
+        {!projectsCollapsed && projects.map((project) => (
           <div
             key={project.id}
             className={cn(
@@ -112,7 +138,7 @@ export function ProjectSidebar({
             </button>
           </div>
         ))}
-        {projects.length === 0 && (
+        {!projectsCollapsed && projects.length === 0 && (
           <p className="px-2 py-1 text-[11px] text-muted-foreground/50">No projects yet</p>
         )}
       </div>
