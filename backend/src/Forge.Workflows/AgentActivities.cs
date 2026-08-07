@@ -334,13 +334,40 @@ public static class AgentActivities
             await RecordEventAsync(db, taskId, "DeveloperSyncingRepo", AgentRole.Developer,
                 new { message = $"git fetch origin {task.Project.RootBranch}" });
 
+            // Found live (2026-08-07): this used to throw, which Temporal's activity
+            // retry policy treats as transient - 5 attempts with growing backoff,
+            // burning ~10+ minutes on something a git auth failure (expired PAT/SSH
+            // key) will NEVER recover from by retrying. Once retries exhausted, the
+            // exception propagated all the way up through TaskWorkflow.RunAsync
+            // (nothing there catches it), crashing the whole workflow outright - the
+            // stuck-task safeguard (docs/006-Scheduler.md §4a) would then "recover"
+            // it by starting a brand new execution, re-running the Planner (a real,
+            // paid LLM call) from scratch, only to hit the exact same git failure and
+            // repeat the whole cycle. Confirmed live: two tasks stuck in this loop for
+            // over an hour, each cycle re-invoking Planner uselessly. Treating this
+            // exactly like the untrusted-project/missing-LocalPath checks above -
+            // straight to Blocked on the first failure, no retry, no crash - stops the
+            // waste immediately and gives the founder a clear, actionable reason
+            // instead of a repeating loop with nothing visible until it goes terminal.
             var fetch = await GitOps.RunAsync(localPath, "fetch", "origin", task.Project.RootBranch);
             if (!fetch.Success)
-                throw new InvalidOperationException($"git fetch failed: {fetch.Stderr}");
+            {
+                await RecordEventAsync(db, taskId, "DeveloperNeedsClarification", AgentRole.Developer,
+                    new { reason = "git fetch failed", stderr = fetch.Stderr });
+                return new DeveloperResult(true, [
+                    $"`git fetch origin {task.Project.RootBranch}` failed in {localPath}: {fetch.Stderr.Trim()} - likely an expired/invalid credential (PAT/SSH key) for this repository. This needs a human to fix the credential; retrying or re-planning won't help."
+                ]);
+            }
 
             var addWorktree = await GitOps.RunAsync(localPath, "worktree", "add", worktreePath, "-b", branchName, $"origin/{task.Project.RootBranch}");
             if (!addWorktree.Success)
-                throw new InvalidOperationException($"git worktree add failed: {addWorktree.Stderr}");
+            {
+                await RecordEventAsync(db, taskId, "DeveloperNeedsClarification", AgentRole.Developer,
+                    new { reason = "git worktree add failed", stderr = addWorktree.Stderr });
+                return new DeveloperResult(true, [
+                    $"`git worktree add` failed for branch '{branchName}': {addWorktree.Stderr.Trim()} - needs a human to check (a stale worktree/branch left over from a prior run is the most common cause)."
+                ]);
+            }
 
             worktree = new Worktree
             {
