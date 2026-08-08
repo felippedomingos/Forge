@@ -20,6 +20,7 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
     public DbSet<User> Users => Set<User>();
     public DbSet<AgentMemory> AgentMemories => Set<AgentMemory>();
     public DbSet<Tag> Tags => Set<Tag>();
+    public DbSet<ClaudeAccount> ClaudeAccounts => Set<ClaudeAccount>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -110,6 +111,19 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
             e.Property(r => r.CostEstimate).HasColumnType("numeric(10,4)");
             e.HasIndex(r => r.TaskId).HasDatabaseName("ix_runs_task");
             e.HasOne(r => r.Task).WithMany(t => t.Runs).HasForeignKey(r => r.TaskId);
+            // Optional - keep the Run's cost/token history even if the ClaudeAccount
+            // that handled it is later removed, rather than losing the record.
+            e.HasOne(r => r.ClaudeAccount).WithMany(a => a.Runs).HasForeignKey(r => r.ClaudeAccountId)
+                .OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(r => r.ClaudeAccountId).HasDatabaseName("ix_runs_claude_account");
+        });
+
+        modelBuilder.Entity<ClaudeAccount>(e =>
+        {
+            e.ToTable("claude_accounts");
+            e.HasKey(a => a.Id);
+            e.HasOne(a => a.User).WithMany().HasForeignKey(a => a.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(a => a.UserId).HasDatabaseName("ix_claude_accounts_user");
         });
 
         modelBuilder.Entity<DomainEvent>(e =>

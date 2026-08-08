@@ -24,5 +24,14 @@ public class Run
     // no longer exists if the CLI's own transcript retention has since pruned it.
     public string? TranscriptPath { get; set; }
 
+    // Founder-requested (2026-08-08): which Claude account actually handled this
+    // invocation, for real per-account usage tracking (ClaudeAccountPool.cs picks
+    // the account before ClaudeCliProvider.InvokeAsync runs). Null for runs recorded
+    // before this existed, or when no ClaudeAccount rows are configured at all (the
+    // zero-config default - Forge falls back to whatever's already the ambient
+    // logged-in account on this machine, same as always).
+    public Guid? ClaudeAccountId { get; set; }
+
     public TaskItem? Task { get; set; }
+    public ClaudeAccount? ClaudeAccount { get; set; }
 }

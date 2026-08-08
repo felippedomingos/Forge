@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, Pencil, Trash2, Users as UsersIcon } from 'lucide-react'
+import { Bot, KeyRound, Pencil, Trash2, Users as UsersIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,125 @@ import {
 } from '@/components/ui/dialog'
 import { api } from '@/lib/api'
 
+// docs/adr/ADR-0005 - founder-requested: multi-account Claude failover, managed per
+// user ("clicar no usuario e adicionar as contas vinculadas ao usuario"). Token comes
+// from `claude setup-token` (run by the founder himself, once per account, in a
+// terminal - Forge never generates one) and never round-trips back once saved, same
+// posture as Project.GitCredential - only add/rename/toggle/remove, no "current
+// value" to show or edit.
+function ClaudeAccountsPanel({ userId, userName }: { userId: string; userName: string }) {
+  const queryClient = useQueryClient()
+  const [newName, setNewName] = useState('')
+  const [newToken, setNewToken] = useState('')
+
+  const accountsQuery = useQuery({
+    queryKey: ['claude-accounts', userId],
+    queryFn: () => api.listClaudeAccounts(userId),
+  })
+  const accounts = accountsQuery.data ?? []
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['claude-accounts', userId] })
+
+  const addAccount = useMutation({
+    mutationFn: () => api.addClaudeAccount(userId, newName, newToken),
+    onSuccess: () => {
+      toast.success('Claude account added.')
+      setNewName('')
+      setNewToken('')
+      invalidate()
+    },
+    onError: () => toast.error('Could not add the account - check the token.'),
+  })
+
+  const toggleActive = useMutation({
+    mutationFn: (vars: { id: string; isActive: boolean }) =>
+      api.updateClaudeAccount(vars.id, { isActive: vars.isActive }),
+    onSuccess: invalidate,
+    onError: () => toast.error('Could not update the account.'),
+  })
+
+  const removeAccount = useMutation({
+    mutationFn: (id: string) => api.removeClaudeAccount(id),
+    onSuccess: () => {
+      toast.success('Account removed.')
+      invalidate()
+    },
+    onError: () => toast.error('Could not remove the account.'),
+  })
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-2">
+      <Label>Claude accounts for {userName}</Label>
+      <p className="text-xs text-muted-foreground">
+        Automatic failover across accounts when one hits a usage limit (docs/adr/ADR-0005).
+        Run <code className="rounded bg-muted px-1">claude setup-token</code> in a terminal to
+        get a token, then paste it below. Usage shown is Forge's own estimate from its
+        recorded runs, not a real queried quota.
+      </p>
+
+      {accountsQuery.isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
+      {!accountsQuery.isLoading && accounts.length === 0 && (
+        <p className="text-xs text-muted-foreground/60">No accounts yet - the default ambient login is used.</p>
+      )}
+      {accounts.map((a) => (
+        <div key={a.id} className="flex flex-col gap-1 rounded-lg border border-border/60 bg-background/60 p-2">
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{a.name}</p>
+            <Badge variant={a.isActive ? 'secondary' : 'outline'} className="rounded-full px-1.5 text-[10px]">
+              {a.isActive ? 'active' : 'paused'}
+            </Badge>
+            <button
+              onClick={() => toggleActive.mutate({ id: a.id, isActive: !a.isActive })}
+              disabled={toggleActive.isPending}
+              className="shrink-0 text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              {a.isActive ? 'Pause' : 'Resume'}
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm(`Remove "${a.name}"? This cannot be undone.`)) removeAccount.mutate(a.id)
+              }}
+              disabled={removeAccount.isPending}
+              className="shrink-0 text-muted-foreground/50 hover:text-destructive"
+              aria-label={`Remove ${a.name}`}
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </div>
+          <div className="flex gap-3 text-[10px] text-muted-foreground">
+            <span>
+              Session (5h): ${a.sessionUsage.costUsd.toFixed(2)} · {a.sessionUsage.promptTokens + a.sessionUsage.completionTokens} tok
+            </span>
+            <span>
+              Week: ${a.weeklyUsage.costUsd.toFixed(2)} · {a.weeklyUsage.promptTokens + a.weeklyUsage.completionTokens} tok
+            </span>
+          </div>
+        </div>
+      ))}
+
+      <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-border/60 p-2">
+        <Input placeholder='Name (e.g. "Conta 2")' value={newName} onChange={(e) => setNewName(e.target.value)} />
+        <Input
+          placeholder="Token from `claude setup-token`"
+          type="password"
+          autoComplete="off"
+          value={newToken}
+          onChange={(e) => setNewToken(e.target.value)}
+        />
+        <Button
+          size="sm"
+          variant="secondary"
+          className="w-fit"
+          disabled={!newName || !newToken || addAccount.isPending}
+          onClick={() => addAccount.mutate()}
+        >
+          Add Claude account
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // docs/adr/ADR-0006 - Admin-only account management (mirrors the `Role == "Admin"`
 // check already gating POST/PUT/GET /users on the backend; this dialog is itself only
 // mounted for Admins, see ProjectSidebar). Self-service password changes go through the
@@ -27,6 +146,7 @@ function UserRow({ user }: { user: { id: string; name: string; email: string; ro
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [managingAccounts, setManagingAccounts] = useState(false)
   const [name, setName] = useState(user.name)
   const [email, setEmail] = useState(user.email)
   const [role, setRole] = useState(user.role)
@@ -96,43 +216,54 @@ function UserRow({ user }: { user: { id: string; name: string; email: string; ro
 
   if (!editing) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 p-2">
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-medium text-foreground">{user.name}</p>
-          <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 p-2">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium text-foreground">{user.name}</p>
+            <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+          </div>
+          <Badge variant="secondary" className="rounded-full px-1.5 text-[10px]">
+            {user.role}
+          </Badge>
+          <button
+            onClick={() => setManagingAccounts((v) => !v)}
+            className="shrink-0 text-muted-foreground/50 hover:text-foreground"
+            aria-label={`Claude accounts for ${user.name}`}
+            aria-pressed={managingAccounts}
+          >
+            <Bot className="size-3.5" />
+          </button>
+          <button
+            onClick={() => setResetting(true)}
+            className="shrink-0 text-muted-foreground/50 hover:text-foreground"
+            aria-label={`Reset password for ${user.name}`}
+          >
+            <KeyRound className="size-3.5" />
+          </button>
+          <button
+            onClick={() => {
+              setName(user.name)
+              setEmail(user.email)
+              setRole(user.role)
+              setEditing(true)
+            }}
+            className="shrink-0 text-muted-foreground/50 hover:text-foreground"
+            aria-label={`Edit ${user.name}`}
+          >
+            <Pencil className="size-3.5" />
+          </button>
+          <button
+            onClick={() => {
+              if (window.confirm(`Delete ${user.name}? This cannot be undone.`)) remove.mutate()
+            }}
+            disabled={remove.isPending}
+            className="shrink-0 text-muted-foreground/50 hover:text-destructive disabled:opacity-50"
+            aria-label={`Delete ${user.name}`}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
         </div>
-        <Badge variant="secondary" className="rounded-full px-1.5 text-[10px]">
-          {user.role}
-        </Badge>
-        <button
-          onClick={() => setResetting(true)}
-          className="shrink-0 text-muted-foreground/50 hover:text-foreground"
-          aria-label={`Reset password for ${user.name}`}
-        >
-          <KeyRound className="size-3.5" />
-        </button>
-        <button
-          onClick={() => {
-            setName(user.name)
-            setEmail(user.email)
-            setRole(user.role)
-            setEditing(true)
-          }}
-          className="shrink-0 text-muted-foreground/50 hover:text-foreground"
-          aria-label={`Edit ${user.name}`}
-        >
-          <Pencil className="size-3.5" />
-        </button>
-        <button
-          onClick={() => {
-            if (window.confirm(`Delete ${user.name}? This cannot be undone.`)) remove.mutate()
-          }}
-          disabled={remove.isPending}
-          className="shrink-0 text-muted-foreground/50 hover:text-destructive disabled:opacity-50"
-          aria-label={`Delete ${user.name}`}
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+        {managingAccounts && <ClaudeAccountsPanel userId={user.id} userName={user.name} />}
       </div>
     )
   }

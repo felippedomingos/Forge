@@ -75,6 +75,7 @@ public static class AgentActivities
             TranscriptPath = cliResult.SessionId is null
                 ? null
                 : ClaudeTranscriptReader.ComputeTranscriptPath(cliResult.SessionId, workingDirectory),
+            ClaudeAccountId = cliResult.ClaudeAccountId,
         });
         await db.SaveChangesAsync();
     }

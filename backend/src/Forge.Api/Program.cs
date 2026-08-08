@@ -279,6 +279,125 @@ app.MapDelete("/users/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal prin
     return Results.Ok();
 });
 
+// Founder-requested (2026-08-08, docs/adr/ADR-0005): per-user Claude accounts for
+// automatic multi-account failover (ClaudeAccountPool.cs/ClaudeCliProvider.cs) with
+// real usage tracking. Admin-only, same gating as the rest of /users - a
+// ClaudeAccount's token is a real, billable credential, not something any user
+// should be able to attach to any other user's name.
+app.MapPost("/users/{id:guid}/claude-accounts", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id, CreateClaudeAccountRequest request) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+    if (string.IsNullOrWhiteSpace(request.Token)) return Results.BadRequest(new { error = "token is required." });
+
+    var user = await db.Users.FindAsync(id);
+    if (user is null) return Results.NotFound();
+
+    var account = new ClaudeAccount
+    {
+        Id = Guid.NewGuid(),
+        Name = request.Name,
+        UserId = id,
+        Token = request.Token,
+        IsActive = true,
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
+    db.ClaudeAccounts.Add(account);
+    await db.SaveChangesAsync();
+
+    return Results.Created($"/claude-accounts/{account.Id}", new { account.Id, account.Name, account.IsActive, account.CreatedAt });
+});
+
+// Usage windows mirror Claude subscription's own commonly-known shape (a rolling
+// session limit + a rolling weekly cap) - computed from this project's own Run rows,
+// same honest "our own estimate, not a real queried quota" framing GET /cost already
+// uses (Anthropic exposes no API to check a subscription's actual remaining usage).
+// Does NOT reflect live cooldown state - ClaudeAccountPool's cooldown tracking is
+// in-memory inside the Worker process (a separate OS process from this Api), so
+// there's nothing here for the Api to read; this is usage history, not real-time
+// account health.
+app.MapGet("/users/{id:guid}/claude-accounts", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var now = DateTimeOffset.UtcNow;
+    var sessionWindowStart = now - TimeSpan.FromHours(5);
+    var weeklyWindowStart = now - TimeSpan.FromDays(7);
+
+    var accounts = await db.ClaudeAccounts.AsNoTracking()
+        .Where(a => a.UserId == id)
+        .OrderBy(a => a.CreatedAt)
+        .ToListAsync();
+
+    var result = new List<object>();
+    foreach (var account in accounts)
+    {
+        var sessionRuns = await db.Runs.AsNoTracking()
+            .Where(r => r.ClaudeAccountId == account.Id && r.StartedAt >= sessionWindowStart)
+            .ToListAsync();
+        var weeklyRuns = await db.Runs.AsNoTracking()
+            .Where(r => r.ClaudeAccountId == account.Id && r.StartedAt >= weeklyWindowStart)
+            .ToListAsync();
+
+        result.Add(new
+        {
+            account.Id,
+            account.Name,
+            account.IsActive,
+            account.CreatedAt,
+            sessionUsage = new
+            {
+                windowStart = sessionWindowStart,
+                costUsd = sessionRuns.Sum(r => r.CostEstimate),
+                promptTokens = sessionRuns.Sum(r => r.PromptTokens),
+                completionTokens = sessionRuns.Sum(r => r.CompletionTokens),
+                runCount = sessionRuns.Count,
+            },
+            weeklyUsage = new
+            {
+                windowStart = weeklyWindowStart,
+                costUsd = weeklyRuns.Sum(r => r.CostEstimate),
+                promptTokens = weeklyRuns.Sum(r => r.PromptTokens),
+                completionTokens = weeklyRuns.Sum(r => r.CompletionTokens),
+                runCount = weeklyRuns.Count,
+            },
+        });
+    }
+
+    return Results.Ok(result);
+});
+
+app.MapPatch("/claude-accounts/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id, UpdateClaudeAccountRequest request) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var account = await db.ClaudeAccounts.FindAsync(id);
+    if (account is null) return Results.NotFound();
+
+    if (request.Name is not null) account.Name = request.Name;
+    if (request.IsActive is { } isActive) account.IsActive = isActive;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new { account.Id, account.Name, account.IsActive, account.CreatedAt });
+});
+
+// No token-rotation endpoint deliberately - a compromised/expired token is replaced
+// by deleting this account and creating a fresh one (POST above), the same
+// "re-issue, don't partially patch a secret" posture as Project.GitCredential's own
+// PATCH tri-state, just simpler here since there's no risk of an unrelated field
+// update accidentally clearing it.
+app.MapDelete("/claude-accounts/{id:guid}", async (ForgeDbContext db, ClaimsPrincipal principal, Guid id) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+
+    var account = await db.ClaudeAccounts.FindAsync(id);
+    if (account is null) return Results.NotFound();
+
+    db.ClaudeAccounts.Remove(account);
+    await db.SaveChangesAsync();
+
+    return Results.Ok();
+});
+
 // docs/adr/ADR-0006's noted gap ("no password reset flow exists yet") - this is the
 // self-service half of it: any authenticated user can change their own password by
 // proving they know the current one (BCrypt.Verify), no Admin action needed. Admin-driven
@@ -1008,6 +1127,11 @@ record BootstrapRequest(string Name, string Email, string Password);
 record LoginRequest(string Email, string Password);
 record CreateUserRequest(string Name, string Email, string Role, string Password);
 record UpdateUserRequest(string? Name, string? Email, string? Role);
+// Token comes from `claude setup-token` (docs/adr/ADR-0005) - the founder runs that
+// himself, once per account, in his own terminal; Forge never generates or sees it
+// any other way.
+record CreateClaudeAccountRequest(string Name, string Token);
+record UpdateClaudeAccountRequest(string? Name, bool? IsActive);
 record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 record ResetPasswordRequest(string NewPassword);
 // docs/013-Frontend.md - free-form per-project labels.

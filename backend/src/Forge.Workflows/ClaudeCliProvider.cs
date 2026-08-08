@@ -4,7 +4,11 @@ using System.Text.RegularExpressions;
 
 namespace Forge.Workflows;
 
-public record ClaudeCliResult(string Text, decimal CostUsd, int InputTokens, int OutputTokens, string? SessionId);
+// ClaudeAccountId: which ClaudeAccount (if any) actually handled this invocation -
+// null under the zero-config default (no ClaudeAccount rows exist, falls back to
+// whatever's already the ambient logged-in account). AgentActivities.RecordRunAsync
+// persists this onto the Run row for real per-account usage tracking.
+public record ClaudeCliResult(string Text, decimal CostUsd, int InputTokens, int OutputTokens, string? SessionId, Guid? ClaudeAccountId = null);
 
 // Thrown instead of the plain InvalidOperationException other CLI failures raise -
 // the one signal ClaudeCliProvider.InvokeAsync's rotation loop acts on. Everything
@@ -37,22 +41,29 @@ public static class ClaudeCliProvider
     // bypassPermissions is set, since that already allows everything.
     public static async Task<ClaudeCliResult> InvokeAsync(string prompt, string workingDirectory, bool bypassPermissions = false, IReadOnlyList<string>? allowedTools = null, CancellationToken ct = default)
     {
-        ClaudeUsageLimitException? lastLimitError = null;
-        foreach (var account in ClaudeAccountPool.AllAccounts)
+        var accounts = await ClaudeAccountPool.GetActiveAccountsAsync();
+        if (accounts.Count == 0)
         {
-            if (!ClaudeAccountPool.IsAvailable(account)) continue;
+            // Zero-config default - no ClaudeAccount rows exist at all yet. Falls
+            // back to whatever's already the ambient logged-in account on this
+            // machine (today's original single-account behavior, unchanged).
+            return await InvokeOnceAsync(prompt, workingDirectory, null, null, bypassPermissions, allowedTools, ct);
+        }
+
+        ClaudeUsageLimitException? lastLimitError = null;
+        foreach (var account in accounts)
+        {
+            if (!ClaudeAccountPool.IsAvailable(account.Id)) continue;
 
             try
             {
-                return await InvokeOnceAsync(prompt, workingDirectory, account, bypassPermissions, allowedTools, ct);
+                return await InvokeOnceAsync(prompt, workingDirectory, account.Id, account.Token, bypassPermissions, allowedTools, ct);
             }
             catch (ClaudeUsageLimitException ex)
             {
-                ClaudeAccountPool.MarkExhausted(account, ex.ResetAt);
+                ClaudeAccountPool.MarkExhausted(account.Id, ex.ResetAt);
                 lastLimitError = ex;
-                // Try the next configured account, if any - a single-account setup
-                // (ClaudeAccountPool.AllAccounts == [null]) has nothing left to try
-                // and falls through to the throw below on the very next loop check.
+                // Try the next configured account, if any.
             }
         }
 
@@ -64,7 +75,7 @@ public static class ClaudeCliProvider
         throw (Exception?)lastLimitError ?? new InvalidOperationException("No Claude account is currently available (all configured accounts are on cooldown).");
     }
 
-    private static async Task<ClaudeCliResult> InvokeOnceAsync(string prompt, string workingDirectory, string? configDir, bool bypassPermissions, IReadOnlyList<string>? allowedTools, CancellationToken ct)
+    private static async Task<ClaudeCliResult> InvokeOnceAsync(string prompt, string workingDirectory, Guid? accountId, string? token, bool bypassPermissions, IReadOnlyList<string>? allowedTools, CancellationToken ct)
     {
         var psi = new ProcessStartInfo
         {
@@ -74,7 +85,11 @@ public static class ClaudeCliProvider
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+        // A ClaudeAccount's long-lived token (`claude setup-token`), scoped to this
+        // one subprocess call only - never mutates the Worker's own ambient
+        // environment, so different accounts on different calls never interfere with
+        // each other even if invoked concurrently.
+        if (!string.IsNullOrWhiteSpace(token)) psi.Environment["CLAUDE_CODE_OAUTH_TOKEN"] = token;
         psi.ArgumentList.Add("-p");
         psi.ArgumentList.Add(prompt);
         psi.ArgumentList.Add("--output-format");
@@ -123,7 +138,7 @@ public static class ClaudeCliProvider
         var outputTokens = usage.GetProperty("output_tokens").GetInt32();
         var sessionId = root.TryGetProperty("session_id", out var sessionIdProp) ? sessionIdProp.GetString() : null;
 
-        return new ClaudeCliResult(text, cost, inputTokens, outputTokens, sessionId);
+        return new ClaudeCliResult(text, cost, inputTokens, outputTokens, sessionId, accountId);
     }
 
     // NOT YET VALIDATED against a real usage-limit failure from this CLI version -
