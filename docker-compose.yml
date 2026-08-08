@@ -90,6 +90,10 @@ services:
       GH_TOKEN: ${GH_TOKEN:-}
       AZURE_DEVOPS_EXT_PAT: ${AZURE_DEVOPS_EXT_PAT:-}
       CLAUDE_CONFIG_DIR: /root/.claude
+      # Optional multi-account failover (docs/adr/ADR-0005, ClaudeAccountPool.cs) -
+      # unset by default, matching single-account behavior above. See .env.example
+      # for the container-mount caveat before setting this.
+      CLAUDE_ACCOUNT_CONFIG_DIRS: ${CLAUDE_ACCOUNT_CONFIG_DIRS:-}
     volumes:
       - forge_worktrees_data:/data/forge-worktrees
       # Project.LocalPath (set per-project via the UI/API) must point at a path
