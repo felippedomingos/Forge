@@ -370,6 +370,7 @@ app.MapPost("/projects", async (ForgeDbContext db, TemporalClient temporal, Crea
         AllowAgentBypassPermissions = request.AllowAgentBypassPermissions,
         Color = ProjectColorPalette.Colors[projectCount % ProjectColorPalette.Colors.Count],
         MaxConcurrentExecuting = request.MaxConcurrentExecuting,
+        GitCredential = string.IsNullOrWhiteSpace(request.GitCredential) ? null : request.GitCredential,
         CreatedAt = DateTimeOffset.UtcNow
     };
     db.Projects.Add(project);
@@ -416,6 +417,13 @@ app.MapPatch("/projects/{id:guid}", async (ForgeDbContext db, Guid id, UpdatePro
         project.Color = request.Color;
     }
     if (request.MaxConcurrentExecuting is { } newMax) project.MaxConcurrentExecuting = newMax;
+    // Tri-state, unlike every field above (docs/010-Plugins.md §6): null/omitted
+    // leaves the stored PAT untouched (same "don't touch what wasn't sent" convention
+    // as the rest of this endpoint), but an explicit empty string clears it - the only
+    // way to intentionally revoke a stored credential, since the frontend never has
+    // the actual value to send back for comparison.
+    if (request.GitCredential is { Length: 0 }) project.GitCredential = null;
+    else if (request.GitCredential is not null) project.GitCredential = request.GitCredential;
     await db.SaveChangesAsync();
     return Results.Ok(project);
 });
@@ -969,8 +977,14 @@ app.Run();
 
 // docs/012-API.md §2 request shapes - kept next to Program.cs at this skeleton stage,
 // move to their own files once the API grows past this first slice.
-record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath, bool AllowAgentBypassPermissions = false, int MaxConcurrentExecuting = 2);
-record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath, bool? AllowAgentBypassPermissions, string? Color, int? MaxConcurrentExecuting);
+record CreateProjectRequest(string Name, string Prefix, string RepositoryUrl, string RootBranch, Guid GitProviderPluginId, string? LocalPath, bool AllowAgentBypassPermissions = false, int MaxConcurrentExecuting = 2, string? GitCredential = null);
+// GitCredential tri-state (docs/010-Plugins.md §6): omitted/null leaves the stored PAT
+// untouched (same convention every other optional field here already uses); an
+// explicit empty string clears it; anything else sets/rotates it. The frontend never
+// receives the actual value back (Project.GitCredential is [JsonIgnore]'d - see
+// Project.cs), so it can only ever send a brand-new value or an explicit clear, never
+// "echo back what's already there."
+record UpdateProjectRequest(string? Name, string? RepositoryUrl, string? RootBranch, string? LocalPath, bool? AllowAgentBypassPermissions, string? Color, int? MaxConcurrentExecuting, string? GitCredential);
 // Description is optional, user-provided seed context at creation time (may include a
 // link) - distinct from the Planner-authored Task.Description that AgentActivities.
 // PlanAsync overwrites once it finishes (docs/005-Agents.md §2). Not the same field

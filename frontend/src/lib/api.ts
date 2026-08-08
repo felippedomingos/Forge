@@ -40,6 +40,11 @@ export interface Project {
   // once the cap is hit, the next Backlog task just waits for a slot (no UX change
   // here beyond the value itself being editable).
   maxConcurrentExecuting: number
+  // The actual PAT (Project.GitCredential) is [JsonIgnore]'d on the backend and never
+  // sent over the wire - this is the only thing the frontend ever gets, so it can show
+  // "PAT configured" without being able to leak or re-transmit the real value
+  // (docs/010-Plugins.md §6).
+  hasGitCredential: boolean
   createdAt: string
 }
 
@@ -234,6 +239,7 @@ export const api = {
     localPath?: string
     allowAgentBypassPermissions?: boolean
     maxConcurrentExecuting?: number
+    gitCredential?: string
   }) =>
     request<Project>('/projects', {
       method: 'POST',
@@ -252,7 +258,11 @@ export const api = {
         | 'color'
         | 'maxConcurrentExecuting'
       >
-    >,
+      // gitCredential is the write-only counterpart of Project.hasGitCredential - the
+      // real value never round-trips back from the API, so it can't be part of
+      // Project itself (docs/010-Plugins.md §6). Omit to leave the stored PAT
+      // untouched; '' explicitly clears it.
+    > & { gitCredential?: string },
   ) =>
     request<Project>(`/projects/${projectId}`, {
       method: 'PATCH',

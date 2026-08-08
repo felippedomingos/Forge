@@ -49,6 +49,11 @@ export function ProjectEditDialog({
   const [allowBypass, setAllowBypass] = useState(project.allowAgentBypassPermissions)
   const [color, setColor] = useState(project.color)
   const [maxConcurrentExecuting, setMaxConcurrentExecuting] = useState(String(project.maxConcurrentExecuting))
+  // Founder-requested (docs/010-Plugins.md §6): per-project GitHub/Azure DevOps PAT.
+  // Always starts blank - the real value is never sent back by the API
+  // (Project.hasGitCredential is the only thing exposed), so this can only ever hold
+  // a brand-new value the user is about to set, never "what's already there."
+  const [gitCredential, setGitCredential] = useState('')
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -63,6 +68,7 @@ export function ProjectEditDialog({
     setAllowBypass(project.allowAgentBypassPermissions)
     setColor(project.color)
     setMaxConcurrentExecuting(String(project.maxConcurrentExecuting))
+    setGitCredential('')
     setConfirmingDelete(false)
   }, [open, project])
 
@@ -91,12 +97,26 @@ export function ProjectEditDialog({
         allowAgentBypassPermissions: allowBypass,
         color,
         maxConcurrentExecuting: parsedMaxConcurrentExecuting,
+        // Omitted entirely (not sent as '') when left blank - an unrelated "Save
+        // details" click (e.g. just changing the color) must never accidentally wipe
+        // an already-configured PAT. Explicit removal is its own button below.
+        ...(gitCredential ? { gitCredential } : {}),
       }),
     onSuccess: () => {
       toast.success('Project updated.')
+      setGitCredential('')
       invalidate()
     },
     onError: () => toast.error('Could not update the project.'),
+  })
+
+  const removeGitCredential = useMutation({
+    mutationFn: () => api.updateProject(project.id, { gitCredential: '' }),
+    onSuccess: () => {
+      toast.success('Credential removed.')
+      invalidate()
+    },
+    onError: () => toast.error('Could not remove the credential.'),
   })
 
   const savePreviewUrl = useMutation({
@@ -180,6 +200,37 @@ export function ProjectEditDialog({
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="proj-branch">Root branch</Label>
             <BranchSelect id="proj-branch" repositoryUrl={repositoryUrl} value={rootBranch} onChange={setRootBranch} />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="proj-git-credential">Git credential (PAT)</Label>
+            <p className="text-xs text-muted-foreground">
+              Used for `git fetch`/`push` and PR creation against this repo (GitHub or
+              Azure DevOps) instead of whatever's already configured on the host -
+              rotating it here takes effect on the next git operation. Leave blank to
+              keep the current one.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                id="proj-git-credential"
+                type="password"
+                autoComplete="off"
+                placeholder={project.hasGitCredential ? '•••••••• (configured)' : 'Not configured'}
+                value={gitCredential}
+                onChange={(e) => setGitCredential(e.target.value)}
+              />
+              {project.hasGitCredential && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 text-muted-foreground"
+                  disabled={removeGitCredential.isPending}
+                  onClick={() => removeGitCredential.mutate()}
+                >
+                  Remove
+                </Button>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5">

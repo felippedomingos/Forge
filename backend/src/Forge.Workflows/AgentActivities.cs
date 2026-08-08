@@ -334,6 +334,11 @@ public static class AgentActivities
             await RecordEventAsync(db, taskId, "DeveloperSyncingRepo", AgentRole.Developer,
                 new { message = $"git fetch origin {task.Project.RootBranch}" });
 
+            // docs/010-Plugins.md §6 - actively refresh the remote's credential from
+            // Project.GitCredential (a no-op if none is configured) before relying on
+            // whatever's already on disk.
+            await GitOps.EnsureAuthenticatedRemoteAsync(localPath, task.Project.RepositoryUrl, task.Project.GitCredential);
+
             // Found live (2026-08-07): this used to throw, which Temporal's activity
             // retry policy treats as transient - 5 attempts with growing backoff,
             // burning ~10+ minutes on something a git auth failure (expired PAT/SSH
@@ -981,7 +986,7 @@ public static class AgentActivities
             args.AddRange(["--repository", repo.Repository]);
         }
 
-        return await GitOps.RunAzAsync(worktreePath, args.ToArray());
+        return await GitOps.RunAzAsync(worktreePath, project.GitCredential, args.ToArray());
     }
 
     // docs/015-Deployment.md §4 - the Done->Production polling loop needs a stable URL
@@ -1028,6 +1033,11 @@ public static class AgentActivities
         }
 
         var project = await db.Projects.Include(p => p.GitProviderPlugin).FirstOrDefaultAsync(p => p.Id == task.ProjectId);
+
+        if (project is not null)
+        {
+            await GitOps.EnsureAuthenticatedRemoteAsync(worktreePath, project.RepositoryUrl, project.GitCredential);
+        }
 
         var push = await GitOps.RunAsync(worktreePath, "push", "-u", "origin", task.BranchName);
         await RecordEventAsync(db, taskId, "GitPushed", AgentRole.Git,
@@ -1077,7 +1087,7 @@ public static class AgentActivities
                 // from `--fill` is actually lost.
                 var commitMessage = await GitOps.RunAsync(worktreePath, "log", "-1", "--format=%B");
                 var body = commitMessage.Success ? commitMessage.Stdout.Trim() : task.Description ?? "";
-                pr = await GitOps.RunGhAsync(worktreePath, "pr", "create", "--title", task.Title, "--body", body, "--head", task.BranchName!);
+                pr = await GitOps.RunGhAsync(worktreePath, project?.GitCredential, "pr", "create", "--title", task.Title, "--body", body, "--head", task.BranchName!);
             }
 
             var prUrl = ExtractPrUrl(isAzureDevOps, pr);
@@ -1150,13 +1160,13 @@ public static class AgentActivities
             {
                 var prId = url.Split("/pullrequest/").ElementAtOrDefault(1);
                 if (prId is null) return false;
-                var azResult = await GitOps.RunAzAsync(Path.GetTempPath(), "repos", "pr", "show", "--id", prId, "--output", "json");
+                var azResult = await GitOps.RunAzAsync(Path.GetTempPath(), task.Project?.GitCredential, "repos", "pr", "show", "--id", prId, "--output", "json");
                 if (!azResult.Success) return false;
                 using var azDoc = JsonDocument.Parse(azResult.Stdout);
                 return azDoc.RootElement.GetProperty("status").GetString() == "completed";
             }
 
-            var ghResult = await GitOps.RunGhAsync(Path.GetTempPath(), "pr", "view", url, "--json", "state");
+            var ghResult = await GitOps.RunGhAsync(Path.GetTempPath(), task.Project?.GitCredential, "pr", "view", url, "--json", "state");
             if (!ghResult.Success) return false;
             using var ghDoc = JsonDocument.Parse(ghResult.Stdout);
             return ghDoc.RootElement.GetProperty("state").GetString() == "MERGED";

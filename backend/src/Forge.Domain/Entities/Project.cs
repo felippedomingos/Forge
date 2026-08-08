@@ -1,3 +1,6 @@
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json.Serialization;
+
 namespace Forge.Domain.Entities;
 
 // docs/003-Domain.md §1 - maps 1:1 to a Git repository.
@@ -17,6 +20,24 @@ public class Project
     public required string RepositoryUrl { get; set; }
     public required string RootBranch { get; set; } // "main" | "develop" | "dev"
     public Guid GitProviderPluginId { get; set; }
+    // Founder-requested (2026-08-07, docs/010-Plugins.md §6): per-project GitHub/Azure
+    // DevOps PAT, actively injected into git fetch/push and gh/az PR creation
+    // (GitOps.EnsureAuthenticatedRemoteAsync/RunGhAsync/RunAzAsync) rather than relying
+    // on whatever credential happens to already be configured on the host - found live
+    // the same day an expired PAT baked directly into an on-disk remote URL crashed a
+    // task's whole workflow with no visibility into why. Plaintext in Postgres,
+    // matching this project's current security posture (JWT secret, PublishRecipe) -
+    // no encryption-at-rest infra exists yet, a deliberate scope decision, not an
+    // oversight. [JsonIgnore] is load-bearing: every endpoint that returns a Project
+    // returns the tracked entity directly (no response DTO), so this is the only thing
+    // stopping the raw credential from serializing into a GET/PATCH response - see
+    // HasGitCredential below for what the frontend actually gets instead.
+    [JsonIgnore]
+    public string? GitCredential { get; set; }
+    // The only thing about GitCredential ever exposed over HTTP - lets the frontend
+    // show "PAT configured" without ever seeing (or re-transmitting) the actual value.
+    [NotMapped]
+    public bool HasGitCredential => !string.IsNullOrEmpty(GitCredential);
     // Where the canonical (non-worktree) clone lives on this Worker's machine - the
     // Planner reads from here directly (docs/005-Agents.md §2); the Developer agent
     // fetches/syncs it before creating a per-task worktree (docs/007-ExecutionEngine.md §2).
