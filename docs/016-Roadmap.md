@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — updated 2026-08-05, after the Review-rework / self-hosted-restart / production-polling pass
+Draft — updated 2026-08-08, after the SlayZone-import / global-watchdog / per-project-credentials / multi-account-failover pass
 
 ## MVP
 
@@ -31,15 +31,32 @@ Draft — updated 2026-08-05, after the Review-rework / self-hosted-restart / pr
 - [x] **`BacklogSchedulerWorkflow` history-limit bug found and fixed live** ([[006-Scheduler]] §1) — a real project's scheduler ran ~19h at the 5s poll interval, hit Temporal's 51,200-event history limit, and was terminated by the server; the exact "no `ContinueAsNewAsync` yet" risk this doc already flagged, now closed via `Workflow.ContinueAsNewSuggested`. `POST /projects/{id}/resume-scheduler` added as the general recovery lever (mirrors `/tasks/{id}/resume`) - also used to discover and fix the "Forge" project's own scheduler, which had never started at all (the same row/workflow-start race `/tasks/{id}/resume` exists for).
 - [ ] Azure DevOps push/PR is implemented against `az repos pr create`'s documented shape but **not yet exercised against a real PR** ([[010-Plugins]] §5) — founder testing this against a real project next.
 
-### What's left after that
+### Post-MVP: Forge is now dogfooding itself and running real, non-Forge projects (2026-08-06 through 2026-08-08)
 
-Everything else in this MVP section is done. What remains, roughly in order a founder-only, single-machine deployment would hit it:
+The MVP checklist above hasn't changed since 2026-08-05 - everything since then has been the product actually being used (Forge's own backlog run through its own pipeline autonomously) plus real operational incidents found live and fixed, not new planned features. Roughly in the order they happened:
+
+- **Full task lifecycle self-hosted**: `Project.LocalPath` for Forge itself IS this same checkout - Deploy merges a task's branch into it and restarts Forge's own dev processes (`scripts/restart-forge-dev.sh`) before Review, so "Testar" actually shows the real change, not stale code ([[015-Deployment]] §2/§3a).
+- **AI-driven merge-conflict resolution on that merge** ([[015-Deployment]] §3a) - Claude Code CLI resolves a real `git merge` conflict in `LocalPath`, verified via `git diff --check`/`git status` plus an optional per-project build+test gate before Forge commits it.
+- **`GitFinalizeAsync` recognizes "already integrated, no PR possible"** ([[015-Deployment]] §3b) instead of leaving a task stuck in `Done` forever - `git merge-base --is-ancestor` checked before attempting PR creation.
+- **Global stuck-task watchdog, independent of any project's own scheduler** ([[006-Scheduler]] §4a/§4b) - found live that the original per-project safeguard's uptime was entirely coupled to that project's `BacklogSchedulerWorkflow` staying alive; one global instance now restarts dead schedulers and sweeps every project's stuck tasks on a fixed interval regardless.
+- **Fixed a real race in the Todo→Executing capacity gate** ([[006-Scheduler]] §2) - the check-then-act gate could let two tasks for the same project both pass a stale capacity check simultaneously; now an atomic Postgres advisory-lock claim.
+- **`git fetch`/`git worktree add` failures go straight to `Blocked`, not a crash-then-retry loop** ([[005-Agents]] §4) - found live burning real Planner cost in a repeating cycle when a project's git credential expired.
+- **Per-project GitHub/Azure DevOps credential** ([[010-Plugins]] §6) - `Project.GitCredential`, actively injected into `git fetch`/`push`/PR creation, instead of relying on whatever happened to already be configured on the host.
+- **Multi-account Claude failover with real usage tracking** ([[adr/ADR-0005]]) - `ClaudeAccount` (linked to a `User`, token from `claude setup-token`) with automatic rotation on a detected usage-limit failure, and per-account session/weekly usage estimates from real `Run` history.
+- **Project memory strengthened automatically, not just read** ([[005-Agents]] §7) - `DevelopAsync` records a memory note when a task reveals something genuinely worth a future task knowing; memory itself is now read by every LLM-invoking activity (Planner, Developer, Prioritizer, Deploy's conflict resolution), not just two of five.
+- **SlayZone historical import** (252 tasks, 8 external projects, migrated directly into Postgres bypassing the Planner) - exposed and fixed a real gap: `/tasks/{id}/resume` can now skip planning for a task that already has a real, curated `Description`, and `BacklogSchedulerWorkflow` starting for the first time on a project with a large existing backlog can burst-promote past its own capacity limit before the gate catches up (mitigated by the capacity-gate race fix above).
+- **Frontend**: task detail panel actually reaches half the screen width (a CSS specificity bug silently defeated the original intent), Markdown rendering for task descriptions (previously showed literal `##`/`**` from the Planner's real output), sidebar collapse (both the Projects list and the whole drawer), optimistic UI for every card move (the first fix patched the query cache directly and still lost to the board's own 2s poll - the real fix keeps the override outside the cache entirely).
+
+### What's left after all of that
 
 - **Per-project shell/write trust is coarse** (`Project.AllowAgentBypassPermissions` is one bool, not scoped tool-by-tool) — fine today, revisit only if a project needs "can write files but not run arbitrary shell" or similar finer distinctions ([[009-MCP]] §4, [[014-Security]] §4).
 - **Forge changing its own Worker/workflow code needs a manual restart** — the self-restart script deliberately can't touch the process it runs inside of ([[015-Deployment]] §5). A real limitation of self-hosting, not hidden.
 - **AuthZ is a single coarse Admin/non-Admin check**, no per-project permissions - fine for one small team, would need real design work before a second organization/tenant ever uses this.
 - **`Event.Actor` attribution to real users is only done for 2 of several human-originated endpoints** ([[014-Security]] §6) - the pattern's proven, just not repeated everywhere yet.
-- **Real dedicated infrastructure** ([[ADR-0004]]) still doesn't exist - Forge runs entirely on the founder's own machine, substituting for it.
+- **Real dedicated infrastructure** ([[ADR-0004]]) still doesn't exist - Forge runs entirely on the founder's own machine, substituting for it. The fully-containerized `docker-compose.yml` (all 6 services, added 2026-08-07) is documented but has never actually been run end-to-end - the bare-metal dev setup (`STARTUP.md`) is what's validated live.
+- **Claude usage-limit detection is unvalidated against a real failure** (`ClaudeCliProvider.IsUsageLimitError`) - a best-effort phrase match, since only one Claude account exists today to test against.
+- **`conflictResolutionVerifyCommand` still hasn't been exercised against a resolution that actually needed it to catch a bad fix** - every real conflict so far passed the baseline git-level checks cleanly.
+- **Real operational backlog, not a code gap**: as of 2026-08-08, 49 tasks sit `Blocked` across two projects - 26 on AOPS (paused pending a Git credential rotation only the founder can do) and 23 on MKT (genuine clarifying questions needing the founder's own answers, e.g. staging environment access, scope decisions). This will always exist at some level - it's the system correctly routing ambiguity to a human, not a bug to fix away.
 - Everything in v2/v3/v4 below - none of it is blocking, none of it has been asked for yet.
 
 ## v2
