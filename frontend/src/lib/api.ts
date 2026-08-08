@@ -448,4 +448,11 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   removeClaudeAccount: (accountId: string) => request<void>(`/claude-accounts/${accountId}`, { method: 'DELETE' }),
+  // docs/001-Requirements.md NFR-1 - the global cross-project concurrency ceiling.
+  getSettings: () => request<{ maxGlobalConcurrentExecuting: number }>('/settings'),
+  updateSettings: (patch: { maxGlobalConcurrentExecuting: number }) =>
+    request<{ maxGlobalConcurrentExecuting: number }>('/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
 }

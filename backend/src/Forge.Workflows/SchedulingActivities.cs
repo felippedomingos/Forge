@@ -42,11 +42,19 @@ public static class SchedulingActivities
     // live: two DeveloperStarted events 17ms apart in the same project, and that
     // project sitting at 3 Executing tasks against a MaxConcurrentExecuting of 2.
     // Rechecking more often doesn't help - only claiming the slot atomically, in the
-    // same transaction as the check, does. A per-project Postgres advisory
-    // transaction lock (`pg_advisory_xact_lock(hashtext(projectId))`) serializes
-    // concurrent callers for the SAME project (a different project's callers proceed
-    // independently) - the second caller's count query then runs only after the
-    // first has already committed its claim, so it correctly sees the slot as taken.
+    // same transaction as the check, does.
+    //
+    // Founder-requested (2026-08-08, docs/001-Requirements.md NFR-1): also enforces
+    // the global cross-project ceiling (SystemSettings.MaxGlobalConcurrentExecuting,
+    // default 6) in the same atomic check - the last of NFR-1's three concurrency
+    // tiers (per-project/per-worker/global) that was never actually implemented. A
+    // single Postgres advisory transaction lock with a fixed key (`pg_advisory_xact_
+    // lock(0)`) - not per-project like the original fix - serializes EVERY caller
+    // globally, which is a strict superset of the per-project serialization the
+    // original fix needed, so one lock now covers both checks correctly. Promotion is
+    // not a hot path (once per task transition, not per request), so this is a
+    // deliberate, acceptable trade: full global serialization in exchange for one
+    // simple, obviously-correct lock instead of two different lock granularities.
     [Activity]
     public static async Task<bool> HasExecutingCapacityAsync(Guid taskId)
     {
@@ -62,13 +70,17 @@ public static class SchedulingActivities
             .FirstAsync();
 
         await using var tx = await db.Database.BeginTransactionAsync();
-        await db.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT pg_advisory_xact_lock(hashtext({task.ProjectId.ToString()}))");
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(0)");
 
         var executingCount = await db.Tasks
             .CountAsync(t => t.ProjectId == task.ProjectId && t.State == TaskState.Executing);
+        var globalExecutingCount = await db.Tasks.CountAsync(t => t.State == TaskState.Executing);
+        var maxGlobalConcurrentExecuting = await db.SystemSettings
+            .Where(s => s.Id == ForgeDbContext.SystemSettingsId)
+            .Select(s => s.MaxGlobalConcurrentExecuting)
+            .FirstAsync();
 
-        if (executingCount >= task.MaxConcurrentExecuting)
+        if (executingCount >= task.MaxConcurrentExecuting || globalExecutingCount >= maxGlobalConcurrentExecuting)
         {
             await tx.RollbackAsync();
             return false;

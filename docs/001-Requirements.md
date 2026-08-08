@@ -4,7 +4,7 @@
 
 Draft — Phase 1 (Product), written after [[003-Domain]]/[[004-Workflow]]/architecture docs existed, so requirements below are checked against what's actually buildable rather than aspirational.
 
-**Re-audited 2026-08-08** (founder asked "o que faltaria para finalizar o projeto Forge" - this doc hadn't been touched since the original stub phase and no longer reflected reality). Every FR below the "not implemented — stub" wording predates the Planner/Developer/Deploy/Git agents becoming real ([[016-Roadmap]] tracks that history day by day); this pass corrects each status against what's actually running today. The one requirement still genuinely open, unchanged since it was first decided: NFR-1's per-worker and global concurrency tiers.
+**Re-audited 2026-08-08** (founder asked "o que faltaria para finalizar o projeto Forge" - this doc hadn't been touched since the original stub phase and no longer reflected reality). Every FR below the "not implemented — stub" wording predates the Planner/Developer/Deploy/Git agents becoming real ([[016-Roadmap]] tracks that history day by day); this pass corrects each status against what's actually running today. The one requirement flagged as still genuinely open in this pass - NFR-1's global concurrency tier - was closed the same day, minutes later ([[006-Scheduler]] §2). Per-worker remains the only tier left, not yet asked for.
 
 ## Purpose
 
@@ -50,7 +50,7 @@ Formal functional and non-functional requirements derived from [[000-Vision]], a
 
 ## 8. Non-Functional Requirements
 
-- **NFR-1 (Concurrency)**: The system SHALL enforce configurable concurrency limits at the per-project, per-worker, and global tiers. *(partially implemented — per-project is real (`Project.MaxConcurrentExecuting`, and a genuine race in its enforcement was found and fixed live 2026-08-08, [[006-Scheduler]] §2); per-worker (Temporal's `maxConcurrentActivityExecutionSize`) and global (a cross-project LLM-call ceiling) are still exactly what they were at the original writing - decided, never configured. The only thing standing in for a global ceiling today is per-account usage tracking ([[adr/ADR-0005]]), which is visibility, not an enforced limit.)*
+- **NFR-1 (Concurrency)**: The system SHALL enforce configurable concurrency limits at the per-project, per-worker, and global tiers. *(per-project and global implemented — `Project.MaxConcurrentExecuting` and `SystemSettings.MaxGlobalConcurrentExecuting` (default 6, founder-specified, Admin-editable via the sidebar Settings dialog), enforced atomically together in one Postgres advisory-lock transaction, [[006-Scheduler]] §2. Per-worker (Temporal's `maxConcurrentActivityExecutionSize`) remains unconfigured - only one Worker process exists today and nothing has yet contended for it.)*
 - **NFR-2 (Cost)**: Every agent invocation SHALL record token usage and cost against its `Run` row. *(implemented — populated by every real `ClaudeCliProvider` call; `GET /cost` and per-user Claude-account usage windows both read from it, [[011-Database]], [[adr/ADR-0005]])*
 - **NFR-3 (Security)**: See [[014-Security]] in full — **AuthN is now met** (JWT bearer, [[adr/ADR-0006]], validated live end-to-end). AuthZ remains a single coarse Admin/non-Admin check, no per-project permissions - acceptable for the founder's own single-operator use, would need real design work before a second organization ever uses this. Secrets (`Project.GitCredential`, `ClaudeAccount.Token`) are plaintext in Postgres, a deliberate scope decision matching this posture, not an oversight.
 - **NFR-4 (Auditability)**: Every state transition SHALL be reconstructable from the event/workflow history alone. *(implemented — `events` table + Temporal workflow history, [[011-Database]] §3)*
@@ -66,7 +66,7 @@ Formal functional and non-functional requirements derived from [[000-Vision]], a
 | FR-5.1 – FR-5.2 | [[004-Workflow]] §5, [[015-Deployment]] | [[ADR-0001]] | Implemented |
 | FR-6.1 – FR-6.2 | [[005-Agents]] §6, [[010-Plugins]] | [[ADR-0002]] | Implemented |
 | FR-7.1 | [[003-Domain]] row 10, [[015-Deployment]] §4 | — | Implemented |
-| NFR-1 | [[006-Scheduler]] §2 | [[ADR-0001]] | Per-project enforced; per-worker/global still not implemented |
+| NFR-1 | [[006-Scheduler]] §2 | [[ADR-0001]] | Per-project + global enforced; per-worker still not implemented |
 | NFR-2 | [[011-Database]], [[008-ModelRouter]] | [[ADR-0003]] | Implemented |
 | NFR-3 | [[014-Security]] | [[adr/ADR-0006]] | AuthN implemented; AuthZ coarse; secrets plaintext (accepted) |
 | NFR-4 | [[011-Database]] §3 | [[ADR-0001]] | Implemented |

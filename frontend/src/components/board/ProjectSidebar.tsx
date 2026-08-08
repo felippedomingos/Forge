@@ -23,6 +23,7 @@ import { logout, type AuthUser } from '@/lib/auth'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { CreateProjectDialog } from './CreateProjectDialog'
 import { UsersDialog } from './UsersDialog'
+import { SettingsDialog } from './SettingsDialog'
 import { ChangePasswordDialog } from './ChangePasswordDialog'
 
 // Founder-requested: a left-hand "Projetos" nav (repo + shared memory live per-project,
@@ -217,6 +218,7 @@ export function ProjectSidebar({
         {/* Admin-only account management (ADR-0006's `Role == "Admin"` check, mirrored
             here so the entry point isn't shown to someone who'd just get a 403). */}
         {user.role === 'Admin' && <UsersDialog />}
+        {user.role === 'Admin' && <SettingsDialog />}
 
         <ChangePasswordDialog />
 

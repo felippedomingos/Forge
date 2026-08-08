@@ -848,6 +848,30 @@ app.MapGet("/cost", async (ForgeDbContext db) =>
     });
 });
 
+// Founder-requested (2026-08-08, docs/001-Requirements.md NFR-1) - the global
+// cross-project concurrency ceiling, enforced atomically in
+// SchedulingActivities.HasExecutingCapacityAsync. GET is any authenticated user (a
+// read of operational config, not sensitive); PATCH is Admin-only, same gating as
+// the rest of system-wide configuration in this API.
+app.MapGet("/settings", async (ForgeDbContext db) =>
+{
+    var settings = await db.SystemSettings.AsNoTracking().FirstAsync(s => s.Id == ForgeDbContext.SystemSettingsId);
+    return Results.Ok(new { settings.MaxGlobalConcurrentExecuting });
+});
+
+app.MapPatch("/settings", async (ForgeDbContext db, ClaimsPrincipal principal, UpdateSettingsRequest request) =>
+{
+    if (principal.FindFirstValue(ClaimTypes.Role) != "Admin") return Results.Forbid();
+    if (request.MaxGlobalConcurrentExecuting is { } max && max <= 0)
+        return Results.BadRequest(new { error = "maxGlobalConcurrentExecuting must be a positive integer." });
+
+    var settings = await db.SystemSettings.FirstAsync(s => s.Id == ForgeDbContext.SystemSettingsId);
+    if (request.MaxGlobalConcurrentExecuting is { } newMax) settings.MaxGlobalConcurrentExecuting = newMax;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new { settings.MaxGlobalConcurrentExecuting });
+});
+
 // docs/012-API.md §3 / docs/007-ExecutionEngine.md §4 - one WebSocket per task,
 // pushed a "refresh" signal whenever PostgresNotificationListener sees a NOTIFY for
 // this task ID. Clients re-fetch GET /tasks/{id} and /tasks/{id}/events over REST on
@@ -1132,6 +1156,7 @@ record UpdateUserRequest(string? Name, string? Email, string? Role);
 // any other way.
 record CreateClaudeAccountRequest(string Name, string Token);
 record UpdateClaudeAccountRequest(string? Name, bool? IsActive);
+record UpdateSettingsRequest(int? MaxGlobalConcurrentExecuting);
 record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 record ResetPasswordRequest(string NewPassword);
 // docs/013-Frontend.md - free-form per-project labels.

@@ -21,6 +21,12 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
     public DbSet<AgentMemory> AgentMemories => Set<AgentMemory>();
     public DbSet<Tag> Tags => Set<Tag>();
     public DbSet<ClaudeAccount> ClaudeAccounts => Set<ClaudeAccount>();
+    public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
+
+    // Fixed, well-known id for the one-and-only SystemSettings row (seeded by
+    // migration via HasData, which requires an explicit key) - never generated at
+    // runtime, so every environment's row has the same id.
+    public static readonly Guid SystemSettingsId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -124,6 +130,16 @@ public class ForgeDbContext(DbContextOptions<ForgeDbContext> options) : DbContex
             e.HasKey(a => a.Id);
             e.HasOne(a => a.User).WithMany().HasForeignKey(a => a.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(a => a.UserId).HasDatabaseName("ix_claude_accounts_user");
+        });
+
+        // Founder-requested (2026-08-08) - one singleton row, seeded here so a fresh
+        // `dotnet ef database update` always has a usable default (6) rather than
+        // requiring a manual insert before the capacity gate can query it.
+        modelBuilder.Entity<SystemSettings>(e =>
+        {
+            e.ToTable("system_settings");
+            e.HasKey(s => s.Id);
+            e.HasData(new SystemSettings { Id = SystemSettingsId, MaxGlobalConcurrentExecuting = 6 });
         });
 
         modelBuilder.Entity<DomainEvent>(e =>
